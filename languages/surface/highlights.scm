@@ -16,7 +16,7 @@
 ((component_name) @label @property
   (#match? @property "^:"))
 
-(attribute_name) @attribute
+(attribute_name) @label
 (directive_name) @keyword
 (block_name) @keyword
 (subblock_name) @keyword
