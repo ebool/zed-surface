@@ -1,0 +1,133 @@
+================================================================================
+Surface 0.12 representative syntax
+================================================================================
+
+<!doctype html>
+<Layouts.app flash={@flash}>
+  {#if @visible}
+    <Card :for={item <- @items} title={item.title} />
+  {#else}
+    <p>Empty</p>
+  {/if}
+
+  <button :attrs={@rest} :props={@props} :on-click="save">Save</button>
+  <.link navigate={~p"/books"}>Books</.link>
+</Layouts.app>
+
+--------------------------------------------------------------------------------
+
+(fragment
+  (doctype)
+  (component
+    (start_component
+      (component_name)
+      (attribute
+        (attribute_name)
+        (expression
+          (expression_value))))
+    (block
+      (start_block
+        (block_name)
+        (expression_value))
+      (component
+        (self_closing_component
+          (component_name)
+          (directive
+            (directive_name)
+            (expression
+              (expression_value)))
+          (attribute
+            (attribute_name)
+            (expression
+              (expression_value)))))
+      (subblock
+        (subblock_name))
+      (tag
+        (start_tag
+          (tag_name))
+        (text)
+        (end_tag
+          (tag_name)))
+      (end_block
+        (block_name)))
+    (tag
+      (start_tag
+        (tag_name)
+        (directive
+          (directive_name)
+          (expression
+            (expression_value)))
+        (directive
+          (directive_name)
+          (expression
+            (expression_value)))
+        (directive
+          (directive_name)
+          (quoted_attribute_value
+            (attribute_value))))
+      (text)
+      (end_tag
+        (tag_name)))
+    (component
+      (start_component
+        (component_name)
+        (attribute
+          (attribute_name)
+          (expression
+            (expression_value))))
+      (text)
+      (end_component
+        (component_name)))
+    (end_component
+      (component_name))))
+
+================================================================================
+Nested Elixir expressions and slots
+================================================================================
+
+<Form for={@changeset}>
+  <:actions :let={form}>
+    <Field errors={translate_errors(form.errors)} />
+  </:actions>
+  <div {@rest}>{display(%{book: @book, opts: %{compact: true}})}</div>
+</Form>
+
+--------------------------------------------------------------------------------
+
+(fragment
+  (component
+    (start_component
+      (component_name)
+      (attribute
+        (attribute_name)
+        (expression
+          (expression_value))))
+    (component
+      (start_component
+        (component_name)
+        (directive
+          (directive_name)
+          (expression
+            (expression_value))))
+      (component
+        (self_closing_component
+          (component_name)
+          (attribute
+            (attribute_name)
+            (expression
+              (expression_value)))))
+      (end_component
+        (component_name)))
+    (tag
+      (start_tag
+        (tag_name)
+        (expression
+          (expression_value)))
+      (expression
+        (expression_value
+          (expression_value
+            (expression_value))))
+      (end_tag
+        (tag_name)))
+    (end_component
+      (component_name))))

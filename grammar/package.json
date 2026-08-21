@@ -1,0 +1,20 @@
+{
+  "name": "tree-sitter-surface",
+  "version": "0.3.0",
+  "description": "Tree-sitter grammar for Surface templates",
+  "license": "MIT",
+  "repository": "https://github.com/42mon/zed-surface",
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "^0.25.10"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.surface",
+      "file-types": ["sface"]
+    }
+  ]
+}

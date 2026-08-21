@@ -1,0 +1,5 @@
+.DS_Store
+grammar/node_modules/
+grammar/build/
+grammar/.tree-sitter/
+*.wasm

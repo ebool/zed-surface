@@ -1,0 +1,18 @@
+{
+  "grammars": [
+    {
+      "name": "surface",
+      "camelcase": "Surface",
+      "scope": "source.surface",
+      "path": ".",
+      "file-types": ["sface"],
+      "highlights": "../languages/surface/highlights.scm",
+      "injections": "../languages/surface/injections.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.3.0",
+    "license": "MIT",
+    "description": "Surface template grammar"
+  }
+}
