@@ -1,0 +1,17 @@
+<div class="fieldset mb-2">
+  <label for={@id}>
+    <input type="hidden" name={@name} value="false" disabled={@rest[:disabled]} form={@rest[:form]}>
+    <span class="label">
+      <input
+        type="checkbox"
+        id={@id}
+        name={@name}
+        value="true"
+        checked={@checked}
+        class={@class || "checkbox checkbox-sm"}
+        {...@rest}
+      />{@label}
+    </span>
+  </label>
+  <.error :for={msg <- @errors}>{msg}</.error>
+</div>
