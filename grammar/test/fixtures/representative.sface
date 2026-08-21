@@ -1,0 +1,13 @@
+<!doctype html>
+<Layouts.app flash={@flash}>
+  {#if @visible}
+    <Card :for={item <- @items} title={item.title} />
+  {#else}
+    <section id="empty-state">
+      <p>비어 있음</p>
+    </section>
+  {/if}
+
+  <button :attrs={@rest} :props={@props} :on-click="save">저장</button>
+  <.link navigate={~p"/books"}>도서</.link>
+</Layouts.app>
