@@ -5,6 +5,8 @@ project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 grammar_dir="$project_dir/grammar"
 fixture="$grammar_dir/test/fixtures/representative.sface"
 
+node --test "$project_dir/language-server/server.test.mjs"
+
 npm --prefix "$grammar_dir" ci
 npm --prefix "$grammar_dir" run generate
 npm --prefix "$grammar_dir" test

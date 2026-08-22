@@ -12,12 +12,20 @@ Surface-aware parsing instead of treating them as plain HEEx.
   `:on-*`
 - Elixir syntax injection inside expressions and block conditions
 - Bracket matching, automatic indentation, and document outline items
+- Go-to-definition for assigns, local variables, function components, and
+  functions referenced by external `.sface` templates
 - Surface 0.12 representative corpus tests
 
 ## Requirements
 
-Install Zed's Elixir extension as well. Surface parsing works without it, but
-the contents of `{expression}` will not receive Elixir highlighting.
+Install Zed's Elixir extension as well. Surface parsing and navigation work
+without it, but the contents of `{expression}` will not receive Elixir
+highlighting.
+
+Development extensions containing a language server are compiled to WebAssembly
+by Zed. Install either Rust through `rustup`, or Homebrew's `rust-wasm` formula,
+which includes the `wasm32-wasip2` target. Published-extension users do not need
+Rust installed locally.
 
 ## Install as a development extension
 
@@ -34,9 +42,7 @@ existing installation.
 
 The repository includes its grammar under `grammar/`. The extension manifest
 pins a commit containing that generated parser and uses the grammar's `path`
-field, so later extension-only changes cannot silently alter parsing. The
-checked-in manifest currently uses this checkout's absolute `file://` URL so
-the dev extension can build before a remote repository exists.
+field, so later extension-only changes cannot silently alter parsing.
 
 ```sh
 ./scripts/verify.sh
@@ -48,21 +54,41 @@ Pass additional `.sface` files to include them in the parse check:
 ./scripts/verify.sh path/to/template.sface
 ```
 
+The language server itself has no npm dependencies. Run only its tests with:
+
+```sh
+node --test language-server/server.test.mjs
+```
+
+## Navigation
+
+Use `Go to Definition` or Cmd-click an identifier in a `.sface` file. The first
+version understands the following project patterns:
+
+- `@name` to `attr`, `prop`, `data`, `slot`, `assign`, `assign_new`, or `stream`
+- local variables such as `item` in `item <- @items` and `:let={item}`
+- `<.function_component>` and functions called inside `{expressions}`
+- `<Layouts.app>` and module components such as `<Card>`
+- external templates connected to their owner module by `embed_sface`
+
+When the same assign is declared for several functions in one module, the
+server prefers the declaration closest to the helper generated for that
+template. Navigation is intentionally lexical in this initial version; it does
+not compile the Mix project or expand macros.
+
 ## Known limitations
 
-- This extension does not provide completion, diagnostics, or
-  go-to-definition; those features require a Surface-aware language server.
+- Completion, diagnostics, references, and rename are not implemented yet.
+- Go-to-definition uses project source and common Surface/Phoenix conventions;
+  dynamically generated definitions may not resolve.
 - Elixir injection requires the separately installed Elixir extension.
 - The grammar recognizes current component/directive forms broadly, but unusual
   project-specific macros should be added to the corpus before release.
 
 ## Publishing
 
-Before publishing, create the public repository and replace the grammar
-`repository` in `extension.toml` with its HTTPS URL. Keep the pinned revision
-unchanged (or move it to another tested grammar-only commit), verify from a
-clean clone, then submit the repository as the `surface` submodule in
-`zed-industries/extensions`.
+Before publishing, verify the pinned grammar revision from a clean clone, then
+submit the repository as the `surface` submodule in `zed-industries/extensions`.
 
 ## License
 

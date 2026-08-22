@@ -3,3 +3,6 @@ grammar/node_modules/
 grammar/build/
 grammar/.tree-sitter/
 *.wasm
+/grammars/
+/target/
+/.cargo/

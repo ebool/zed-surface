@@ -6,9 +6,14 @@ authors = ["42mon <42mon@users.noreply.github.com>"]
 description = "Surface template language support for Zed"
 repository = "https://github.com/42mon/zed-surface"
 
+[language_servers.surface-language-server]
+name = "Surface Language Server"
+languages = ["Surface"]
+
+[language_servers.surface-language-server.language_ids]
+Surface = "surface"
+
 [grammars.surface]
-# Local development source. Replace with the public repository URL before
-# submitting the extension to the Zed registry.
-repository = "file:///Users/42mon/Projects/sandbox/zed-surface"
+repository = "https://github.com/42mon/zed-surface"
 rev = "e4a2c36ccbd543edc93bb3ca4e8deab2187b8c55"
 path = "grammar"
