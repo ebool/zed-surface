@@ -27,6 +27,10 @@ by Zed. Install either Rust through `rustup`, or Homebrew's `rust-wasm` formula,
 which includes the `wasm32-wasip2` target. Published-extension users do not need
 Rust installed locally.
 
+The extension downloads the dependency-free JavaScript language server from the
+matching GitHub Release on first use and runs it with Zed's managed Node.js
+runtime. The language server is not embedded in the extension binary.
+
 ## Install as a development extension
 
 1. Open Zed's command palette.
