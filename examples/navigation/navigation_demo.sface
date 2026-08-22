@@ -1,0 +1,15 @@
+<!--
+  Go to Definition 테스트:
+  macOS에서는 아래 식별자를 Command-click하거나 Zed의
+  `editor: go to definition` 명령을 실행하세요.
+-->
+<section id={@id} :attrs={@rest}>
+  <h1>{format_label(@title)}</h1>
+
+  <NavigationDemo.card title={@title} />
+  <.badge label={@title} />
+
+  <ul>
+    <li :for={item <- @items}>{item.name}</li>
+  </ul>
+</section>

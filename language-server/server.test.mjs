@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { findDefinitions } from "./server.mjs";
 
@@ -158,4 +158,26 @@ end
   assert.equal(result.length, 1);
   assert.equal(locationPath(result[0]), path.join(root, "lib/layouts.ex"));
   assert.equal(result[0].range.start.line, 1);
+});
+
+test("the checked-in navigation example resolves every documented link", () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const template = "examples/navigation/navigation_demo.sface";
+  const cases = [
+    ["@id", "prop id"],
+    ["@rest", "prop rest"],
+    ["@items", "data items"],
+    ["format_label", "defp format_label"],
+    [".badge", "defp badge"],
+    ["NavigationDemo.card", "def card"],
+    ["item.name", "item <- @items"],
+  ];
+
+  for (const [sourceNeedle, targetNeedle] of cases) {
+    const result = definition(root, template, sourceNeedle);
+    assert.equal(result.length, 1, sourceNeedle);
+    const targetPath = locationPath(result[0]);
+    const targetLine = fs.readFileSync(targetPath, "utf8").split(/\r?\n/)[result[0].range.start.line];
+    assert.match(targetLine, new RegExp(targetNeedle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), sourceNeedle);
+  }
 });

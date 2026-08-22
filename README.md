@@ -58,6 +58,17 @@ Pass additional `.sface` files to include them in the parse check:
 ./scripts/verify.sh path/to/template.sface
 ```
 
+### Manual go-to-definition test
+
+Open `examples/navigation/navigation_demo.sface` in Zed, then Command-click an
+identifier (or run `editor: go to definition`). The fixture covers:
+
+- `@id`, `@rest`, `@title`, and `@items` jumping to declarations in the owner
+  Elixir module
+- `format_label` and `<.badge>` jumping to local functions
+- `<NavigationDemo.card>` jumping to the module component function
+- `item.name` jumping to the `item <- @items` binding
+
 The language server itself has no npm dependencies. Run only its tests with:
 
 ```sh
