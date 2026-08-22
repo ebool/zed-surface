@@ -164,9 +164,9 @@ test("the checked-in navigation example resolves every documented link", () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const template = "examples/navigation/navigation_demo.sface";
   const cases = [
-    ["@id", "prop id"],
-    ["@rest", "prop rest"],
-    ["@items", "data items"],
+    ["@id", "prop(id"],
+    ["@rest", "prop(rest"],
+    ["@items", "data(items"],
     ["format_label", "defp format_label"],
     [".badge", "defp badge"],
     ["NavigationDemo.card", "def card"],

@@ -79,7 +79,7 @@ function parseElixirFile(filePath, source) {
   const aliases = [];
 
   lines.forEach((lineText, line) => {
-    let match = lineText.match(/\bembed_sface\s+["']([^"']+)["']/);
+    let match = lineText.match(/\bembed_sface\s*(?:\(\s*)?["']([^"']+)["']/);
     if (match) {
       embeds.push({
         template: path.resolve(path.dirname(filePath), match[1]),
@@ -87,12 +87,7 @@ function parseElixirFile(filePath, source) {
       });
     }
 
-    match = lineText.match(/^\s*(attr|slot)\s+:([a-zA-Z_]\w*[!?]?)/);
-    if (match) {
-      definitions.push({ kind: match[1], name: match[2], line, start: lineText.indexOf(match[2]) });
-    }
-
-    match = lineText.match(/^\s*(prop|data|slot)\s+:?([a-zA-Z_]\w*[!?]?)/);
+    match = lineText.match(/^\s*(attr|prop|data|slot)\s*(?:\(\s*)?:?([a-zA-Z_]\w*[!?]?)/);
     if (match) {
       definitions.push({ kind: match[1], name: match[2], line, start: lineText.indexOf(match[2]) });
     }

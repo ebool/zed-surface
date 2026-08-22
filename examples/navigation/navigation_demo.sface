@@ -1,7 +1,7 @@
 <!--
-  Go to Definition 테스트:
-  macOS에서는 아래 식별자를 Command-click하거나 Zed의
-  `editor: go to definition` 명령을 실행하세요.
+  Go-to-definition test:
+  Command-click an identifier below on macOS, or run Zed's
+  `editor: go to definition` action.
 -->
 <section id={@id} :attrs={@rest}>
   <h1>{format_label(@title)}</h1>
