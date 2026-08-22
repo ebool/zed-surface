@@ -3,7 +3,7 @@ use std::{env, fs, path::PathBuf};
 use zed_extension_api::{self as zed, Result};
 
 const GITHUB_REPOSITORY: &str = "ebool/zed-surface";
-const SERVER_ASSET: &str = "surface-language-server.mjs";
+const SERVER_ASSET: &str = "server.mjs";
 
 struct SurfaceExtension {
     cached_server_path: Option<PathBuf>,
