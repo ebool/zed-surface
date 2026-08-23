@@ -81,10 +81,14 @@ Use `Go to Definition` or Cmd-click an identifier in a `.sface` file. The first
 version understands the following project patterns:
 
 - `@name` to `attr`, `prop`, `data`, `slot`, `assign`, `assign_new`, or `stream`
+- component attributes such as `flash=` to the `attr` or `prop` contract attached
+  to the resolved component function
 - local variables such as `item` in `item <- @items` and `:let={item}`
 - `<.function_component>` and functions called inside `{expressions}`
 - `<Layouts.app>` and module components such as `<Card>`
 - external templates connected to their owner module by `embed_sface`
+- built-in assigns inherited through `use Surface.LiveView`, resolved to the
+  declaration in the installed Surface dependency
 
 When the same assign is declared for several functions in one module, the
 server prefers the declaration closest to the helper generated for that
@@ -96,6 +100,8 @@ not compile the Mix project or expand macros.
 - Completion, diagnostics, references, and rename are not implemented yet.
 - Go-to-definition uses project source and common Surface/Phoenix conventions;
   dynamically generated definitions may not resolve.
+- Unresolved assigns remain unresolved instead of falling back to unrelated
+  same-named declarations elsewhere in the workspace.
 - Elixir injection requires the separately installed Elixir extension.
 - The grammar recognizes current component/directive forms broadly, but unusual
   project-specific macros should be added to the corpus before release.

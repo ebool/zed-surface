@@ -77,6 +77,7 @@ function parseElixirFile(filePath, source) {
   const definitions = [];
   const imports = [];
   const aliases = [];
+  const uses = [];
 
   lines.forEach((lineText, line) => {
     let match = lineText.match(/\bembed_sface\s*(?:\(\s*)?["']([^"']+)["']/);
@@ -103,9 +104,13 @@ function parseElixirFile(filePath, source) {
     match = lineText.match(/^\s*alias\s+([A-Z][\w.]*)(?:,\s+as:\s+([A-Z]\w*))?/);
     if (match) aliases.push({ module: match[1], as: match[2] ?? match[1].split(".").at(-1) });
 
+    match = lineText.match(/^\s*use\s*(?:\(\s*)?([A-Z][\w.]*)(?:\s*,\s*:([a-zA-Z_]\w*[!?]?))?/);
+    if (match) uses.push({ module: match[1], macro: match[2], line });
+
     const assignmentPatterns = [
       new RegExp(`\\bassign(?:_new)?\\s*\\([^\\n]*?:([a-zA-Z_]\\w*[!?]?)`, "g"),
       new RegExp(`\\bassign\\s*\\([^\\n]*?\\b([a-zA-Z_]\\w*[!?]?)\\s*:`, "g"),
+      new RegExp(`\\bupdate\\s*\\([^\\n]*?:([a-zA-Z_]\\w*[!?]?)`, "g"),
       new RegExp(`\\bstream(?:_configure)?\\s*\\([^\\n]*?:([a-zA-Z_]\\w*[!?]?)`, "g"),
     ];
     for (const pattern of assignmentPatterns) {
@@ -116,7 +121,7 @@ function parseElixirFile(filePath, source) {
     }
   });
 
-  return { filePath, module: moduleMatch?.[1], lines, embeds, definitions, imports, aliases };
+  return { filePath, module: moduleMatch?.[1], lines, embeds, definitions, imports, aliases, uses };
 }
 
 function indexWorkspace(root, openDocuments = new Map()) {
@@ -159,6 +164,131 @@ function locationsForDefinitions(files, name, kinds) {
   return results;
 }
 
+function filesForModule(index, moduleName) {
+  return index.filter(
+    (file) => file.module === moduleName || file.module?.endsWith(`.${moduleName}`),
+  );
+}
+
+function functionLineSpan(file, name) {
+  const start = file.lines.findIndex((line) =>
+    new RegExp(`^\\s*defp?\\s+${name}\\b`).test(line),
+  );
+  if (start === -1) return null;
+
+  const indentation = file.lines[start].match(/^\s*/)?.[0].length ?? 0;
+  let end = file.lines.length;
+  for (let line = start + 1; line < file.lines.length; line += 1) {
+    const match = file.lines[line].match(/^(\s*)defp?\s+[a-zA-Z_]\w*[!?]?\b/);
+    if (match && match[1].length <= indentation) {
+      end = line;
+      break;
+    }
+  }
+  return { start, end };
+}
+
+function moduleUseProvides(index, moduleName, macroName, targetModule, seen = new Set()) {
+  const key = `${moduleName}:${macroName ?? "*"}`;
+  if (seen.has(key)) return false;
+  seen.add(key);
+
+  for (const file of filesForModule(index, moduleName)) {
+    const span = macroName ? functionLineSpan(file, macroName) : null;
+    const uses = span
+      ? file.uses.filter((entry) => entry.line > span.start && entry.line < span.end)
+      : file.uses;
+    for (const entry of uses) {
+      if (entry.module === targetModule) return true;
+      if (moduleUseProvides(index, entry.module, entry.macro, targetModule, seen)) return true;
+    }
+  }
+  return false;
+}
+
+function ownersUseModule(index, owners, targetModule) {
+  return owners.some((owner) => owner.uses.some((entry) =>
+    entry.module === targetModule ||
+    moduleUseProvides(index, entry.module, entry.macro, targetModule),
+  ));
+}
+
+function effectiveImports(index, owners) {
+  const modules = new Set(owners.flatMap((owner) => owner.imports));
+  const visited = new Set();
+
+  function visitUse(entry) {
+    const key = `${entry.module}:${entry.macro ?? "*"}`;
+    if (visited.has(key)) return;
+    visited.add(key);
+    for (const file of filesForModule(index, entry.module)) {
+      for (const imported of file.imports) modules.add(imported);
+      for (const nested of file.uses) visitUse(nested);
+    }
+  }
+
+  for (const owner of owners) {
+    for (const entry of owner.uses) visitUse(entry);
+  }
+  return modules;
+}
+
+function effectiveAliases(index, owners) {
+  const aliases = [...owners.flatMap((owner) => owner.aliases)];
+  const visited = new Set();
+
+  function visitUse(entry) {
+    const key = `${entry.module}:${entry.macro ?? "*"}`;
+    if (visited.has(key)) return;
+    visited.add(key);
+    for (const file of filesForModule(index, entry.module)) {
+      aliases.push(...file.aliases);
+      for (const nested of file.uses) visitUse(nested);
+    }
+  }
+
+  for (const owner of owners) {
+    for (const entry of owner.uses) visitUse(entry);
+  }
+  return aliases;
+}
+
+function componentModuleFiles(index, owners, requested) {
+  const resolved = new Set([requested]);
+  for (const entry of effectiveAliases(index, owners)) {
+    if (entry.as === requested) resolved.add(entry.module);
+  }
+  return index.filter((file) =>
+    [...resolved].some((moduleName) =>
+      file.module === moduleName || file.module?.endsWith(`.${moduleName}`),
+    ),
+  );
+}
+
+function declarationsForFunction(files, functionName, attributeName) {
+  const results = [];
+  for (const file of files) {
+    const functions = file.definitions.filter((definition) => definition.kind === "function");
+    for (const target of functions.filter((definition) => definition.name === functionName)) {
+      const previousFunction = functions
+        .filter((definition) => definition.line < target.line)
+        .at(-1);
+      const declaration = file.definitions
+        .filter((definition) =>
+          new Set(["attr", "prop"]).has(definition.kind) &&
+          definition.name === attributeName &&
+          definition.line < target.line &&
+          definition.line > (previousFunction?.line ?? -1),
+        )
+        .at(-1);
+      if (declaration) {
+        results.push(location(file.filePath, declaration.line, declaration.start, attributeName.length));
+      }
+    }
+  }
+  return results;
+}
+
 function declarationLocationsForTemplate(owners, templatePath, name) {
   const helper = path.basename(templatePath, ".sface");
   const results = [];
@@ -169,25 +299,88 @@ function declarationLocationsForTemplate(owners, templatePath, name) {
       .filter(({ line }) => new RegExp(`\\b${helper}\\s*\\(`).test(line))
       .map(({ index }) => index);
     const targetLine = invocationLines.at(-1);
-    const matches = owner.definitions.filter(
-      (definition) =>
-        definition.name === name &&
-        new Set(["attr", "prop", "data", "slot"]).has(definition.kind),
-    );
-
-    if (targetLine === undefined) {
-      for (const definition of matches) {
-        results.push(location(owner.filePath, definition.line, definition.start, name.length));
-      }
-      continue;
+    for (const kind of ["data", "prop", "attr", "slot"]) {
+      const matches = owner.definitions.filter(
+        (definition) => definition.name === name && definition.kind === kind,
+      );
+      if (matches.length === 0) continue;
+      const preceding = targetLine === undefined
+        ? matches
+        : matches.filter((definition) => definition.line < targetLine);
+      const selected = preceding.at(-1) ?? matches[0];
+      results.push(location(owner.filePath, selected.line, selected.start, name.length));
+      break;
     }
-
-    const preceding = matches.filter((definition) => definition.line < targetLine);
-    const selected = preceding.at(-1) ?? matches[0];
-    if (selected) results.push(location(owner.filePath, selected.line, selected.start, name.length));
   }
 
   return results;
+}
+
+function componentToken(tagName) {
+  if (tagName.startsWith(".")) {
+    return { kind: "local_component", name: tagName.slice(1) };
+  }
+  const pieces = tagName.split(".");
+  if (pieces.length > 1 && /^[a-z_]/.test(pieces.at(-1))) {
+    return {
+      kind: "remote_component",
+      module: pieces.slice(0, -1).join("."),
+      name: pieces.at(-1),
+    };
+  }
+  return { kind: "module_component", module: tagName };
+}
+
+function absolutePosition(source, position) {
+  const lines = source.split(/\n/);
+  let offset = 0;
+  for (let line = 0; line < position.line; line += 1) offset += (lines[line]?.length ?? 0) + 1;
+  return offset + position.character;
+}
+
+function openingTagEnd(source, start) {
+  let braces = 0;
+  let quote = null;
+  let escaped = false;
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === "{") braces += 1;
+    else if (character === "}" && braces > 0) braces -= 1;
+    else if (character === ">" && braces === 0) return index;
+  }
+  return source.length - 1;
+}
+
+function componentAttributeAt(source, position) {
+  const cursor = absolutePosition(source, position);
+  const prefix = source.slice(0, cursor + 1);
+  const tags = [...prefix.matchAll(/<(\.[a-zA-Z_]\w*[!?]?|[A-Z][\w.]*)\b/g)];
+  const tag = tags.at(-1);
+  if (!tag) return null;
+
+  const tagStart = tag.index;
+  const nextClose = openingTagEnd(source, tagStart);
+  if (cursor > nextClose) return null;
+
+  const opening = source.slice(tagStart, nextClose + 1);
+  for (const match of opening.matchAll(/(?:^|\s)(:?[-a-zA-Z_]\w*(?:-\w+)*)(?=\s*=)/g)) {
+    const name = match[1];
+    const start = tagStart + match.index + match[0].lastIndexOf(name);
+    if (cursor >= start && cursor <= start + name.length) {
+      return { kind: "component_attribute", name, component: componentToken(tag[1]) };
+    }
+  }
+  return null;
 }
 
 function tokenAt(source, position) {
@@ -199,6 +392,9 @@ function tokenAt(source, position) {
       return { kind: "assign", name: match[0].slice(1) };
     }
   }
+
+  const attribute = componentAttributeAt(source, position);
+  if (attribute) return attribute;
 
   for (const match of line.matchAll(/<\/?(\.[a-zA-Z_]\w*[!?]?|[A-Z][\w.]*)/g)) {
     const start = match.index + match[0].indexOf(match[1]);
@@ -224,7 +420,7 @@ function tokenAt(source, position) {
 
   for (const match of line.matchAll(/\b([a-zA-Z_]\w*[!?]?)\s*(?=\()/g)) {
     if (character >= match.index && character <= match.index + match[1].length) {
-      return { kind: "local_component", name: match[1] };
+      return { kind: "local_function", name: match[1] };
     }
   }
 
@@ -259,9 +455,44 @@ function localBinderLocation(filePath, source, position, name) {
   return result;
 }
 
-function resolveModuleName(owner, requested) {
-  const explicit = owner?.aliases.find((entry) => entry.as === requested);
-  return explicit?.module ?? requested;
+function localComponentFiles(index, owners, name) {
+  const ownerFiles = owners.filter((owner) =>
+    owner.definitions.some((definition) => definition.kind === "function" && definition.name === name),
+  );
+  if (ownerFiles.length > 0) return ownerFiles;
+  const imports = effectiveImports(index, owners);
+  return index.filter((file) => imports.has(file.module));
+}
+
+function surfaceLiveViewBuiltIn(root, name, openDocuments) {
+  const filePath = path.join(root, "deps", "surface", "lib", "surface", "live_view.ex");
+  const source = readSource(filePath, openDocuments);
+  if (source === null) return [];
+  const file = parseElixirFile(filePath, source);
+  return locationsForDefinitions([file], name, new Set(["data"]));
+}
+
+function componentAttributeDefinitions(index, owners, token) {
+  const component = token.component;
+  if (component.kind === "remote_component") {
+    return declarationsForFunction(
+      componentModuleFiles(index, owners, component.module),
+      component.name,
+      token.name,
+    );
+  }
+  if (component.kind === "local_component") {
+    return declarationsForFunction(
+      localComponentFiles(index, owners, component.name),
+      component.name,
+      token.name,
+    );
+  }
+  return locationsForDefinitions(
+    componentModuleFiles(index, owners, component.module),
+    token.name,
+    new Set(["prop", "attr"]),
+  );
 }
 
 export function findDefinitions({ root, filePath, source, position, openDocuments = new Map() }) {
@@ -283,14 +514,21 @@ export function findDefinitions({ root, filePath, source, position, openDocument
     const localAssignments = locationsForDefinitions(owners, token.name, new Set(["assign"]));
     if (localAssignments.length > 0) return deduplicate(localAssignments);
 
-    return deduplicate(locationsForDefinitions(index, token.name, new Set(["attr", "prop", "data", "slot", "assign"]))).slice(0, 20);
+    if (ownersUseModule(index, owners, "Surface.LiveView")) {
+      return deduplicate(surfaceLiveViewBuiltIn(root, token.name, openDocuments));
+    }
+    return [];
+  }
+
+  if (token.kind === "component_attribute") {
+    return deduplicate(componentAttributeDefinitions(index, owners, token));
   }
 
   if (token.kind === "local_component") {
     let results = locationsForDefinitions(owners, token.name, new Set(["function"]));
     if (results.length > 0) return deduplicate(results);
 
-    const importedModules = new Set(owners.flatMap((owner) => owner.imports));
+    const importedModules = effectiveImports(index, owners);
     results = locationsForDefinitions(
       index.filter((file) => importedModules.has(file.module)),
       token.name,
@@ -298,22 +536,28 @@ export function findDefinitions({ root, filePath, source, position, openDocument
     );
     if (results.length > 0) return deduplicate(results);
 
+    return [];
+  }
+
+  if (token.kind === "local_function") {
+    let results = locationsForDefinitions(owners, token.name, new Set(["function"]));
+    if (results.length > 0) return deduplicate(results);
+    const importedModules = effectiveImports(index, owners);
+    results = locationsForDefinitions(
+      index.filter((file) => importedModules.has(file.module)),
+      token.name,
+      new Set(["function"]),
+    );
+    if (results.length > 0) return deduplicate(results);
     return deduplicate(locationsForDefinitions(index, token.name, new Set(["function"]))).slice(0, 20);
   }
 
   if (token.kind === "remote_component") {
-    const requestedModules = new Set(
-      owners.map((owner) => resolveModuleName(owner, token.module)),
-    );
-    const candidates = index.filter((file) =>
-      [...requestedModules].some((requested) => file.module === requested || file.module?.endsWith(`.${requested}`)),
-    );
+    const candidates = componentModuleFiles(index, owners, token.module);
     return deduplicate(locationsForDefinitions(candidates, token.name, new Set(["function"])));
   }
 
-  const candidates = index.filter((file) =>
-    file.module === token.module || file.module?.endsWith(`.${token.module}`),
-  );
+  const candidates = componentModuleFiles(index, owners, token.module);
   return candidates.map((file) => {
     const line = file.lines.findIndex((text) => /^\s*defmodule\b/.test(text));
     const start = file.lines[line]?.indexOf(file.module) ?? 0;
@@ -342,7 +586,7 @@ function handle(message) {
         definitionProvider: true,
         textDocumentSync: { openClose: true, change: 1 },
       },
-      serverInfo: { name: "surface-language-server", version: "0.1.0" },
+      serverInfo: { name: "surface-language-server", version: "0.0.3" },
     });
     return;
   }

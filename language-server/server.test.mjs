@@ -160,6 +160,99 @@ end
   assert.equal(result[0].range.start.line, 1);
 });
 
+function contextualSymbolFixture() {
+  return fixture({
+    "lib/app_web.ex": `defmodule AppWeb do
+  def surface_live_view do
+    quote do
+      use Surface.LiveView
+      import AppWeb.CoreComponents
+      alias AppWeb.Layouts
+    end
+  end
+end
+`,
+    "lib/home_entry.ex": `defmodule AppWeb.HomeEntry do
+  use AppWeb, :surface_live_view
+  embed_sface "local.sface"
+end
+`,
+    "lib/home_entry.sface": `<Layouts.sidebar
+  flash={@flash}
+>
+</Layouts.sidebar>
+`,
+    "lib/local.sface": `<.flash flash={@flash} />`,
+    "lib/layouts.ex": `defmodule AppWeb.Layouts do
+  attr :flash, :map
+  def landing(assigns), do: assigns
+
+  attr :flash, :map, required: true
+  def sidebar(assigns), do: assigns
+
+  attr :flash, :map
+  def flash_group(assigns), do: assigns
+end
+`,
+    "lib/core_components.ex": `defmodule AppWeb.CoreComponents do
+  attr :flash, :map
+  def flash(assigns), do: assigns
+end
+`,
+    "deps/surface/lib/surface/live_view.ex": `defmodule Surface.LiveView do
+  data socket, :struct
+  data flash, :map
+end
+`,
+  });
+}
+
+test("a remote component attribute resolves only against that function contract", () => {
+  const root = contextualSymbolFixture();
+  const result = definition(root, "lib/home_entry.sface", "flash=");
+  assert.equal(result.length, 1);
+  assert.equal(locationPath(result[0]), path.join(root, "lib/layouts.ex"));
+  assert.equal(result[0].range.start.line, 4);
+});
+
+test("an assign inherited through a use macro resolves to the Surface LiveView built-in", () => {
+  const root = contextualSymbolFixture();
+  const result = definition(root, "lib/home_entry.sface", "@flash");
+  assert.equal(result.length, 1);
+  assert.equal(locationPath(result[0]), path.join(root, "deps/surface/lib/surface/live_view.ex"));
+  assert.equal(result[0].range.start.line, 2);
+});
+
+test("a local component tag and its attribute resolve through scoped imports", () => {
+  const root = contextualSymbolFixture();
+  const component = definition(root, "lib/local.sface", ".flash");
+  const attribute = definition(root, "lib/local.sface", "flash={");
+  const assign = definition(root, "lib/local.sface", "@flash");
+
+  assert.equal(component.length, 1);
+  assert.equal(component[0].range.start.line, 2);
+  assert.equal(attribute.length, 1);
+  assert.equal(attribute[0].range.start.line, 1);
+  assert.equal(assign.length, 1);
+  assert.equal(locationPath(assign[0]), path.join(root, "deps/surface/lib/surface/live_view.ex"));
+});
+
+test("an unresolved assign never falls back to a same-named global attr", () => {
+  const root = fixture({
+    "lib/page.ex": `defmodule AppWeb.Page do
+end
+`,
+    "lib/page.sface": `<span>{@flash}</span>`,
+    "lib/core_components.ex": `defmodule AppWeb.CoreComponents do
+  attr :flash, :map
+  def flash(assigns), do: assigns
+end
+`,
+  });
+
+  assert.deepEqual(definition(root, "lib/page.sface", "@flash"), []);
+});
+
 test("the checked-in navigation example resolves every documented link", () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const template = "examples/navigation/navigation_demo.sface";

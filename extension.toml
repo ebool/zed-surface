@@ -1,6 +1,6 @@
 id = "surface"
 name = "Surface"
-version = "0.0.2"
+version = "0.0.3"
 schema_version = 1
 authors = ["42mon <42mon@users.noreply.github.com>"]
 description = "Surface template language support for Zed"
