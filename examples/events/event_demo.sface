@@ -1,0 +1,7 @@
+<!--
+  Cmd-click "delete" to jump to both handle_event/3 clauses.
+  Run Find References on either handler event name to return this event and the
+  event inside EventButton's ~H sigil.
+-->
+<button phx-click="delete">Delete directly</button>
+<.event_button />

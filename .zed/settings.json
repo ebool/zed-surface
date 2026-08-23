@@ -1,0 +1,18 @@
+{
+  "languages": {
+    "Elixir": {
+      "language_servers": [
+        "surface-language-server",
+        "!elixir-ls",
+        "..."
+      ]
+    },
+    "HEEx": {
+      "language_servers": [
+        "surface-language-server",
+        "!elixir-ls",
+        "..."
+      ]
+    }
+  }
+}

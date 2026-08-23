@@ -14,13 +14,15 @@ Surface-aware parsing instead of treating them as plain HEEx.
 - Bracket matching, automatic indentation, and document outline items
 - Go-to-definition for assigns, local variables, function components, and
   functions referenced by external `.sface` templates
+- Owner-aware LiveView event navigation from `phx-*` values to `handle_event/3`,
+  with reverse Find References support
 - Surface 0.12 representative corpus tests
 
 ## Requirements
 
-Install Zed's Elixir extension as well. Surface parsing and navigation work
-without it, but the contents of `{expression}` will not receive Elixir
-highlighting.
+Install Zed's Elixir extension as well. Surface parsing and `.sface` navigation
+work without it, but `{expression}` highlighting and reverse event navigation
+from Elixir `handle_event/3` definitions require the Elixir language.
 
 Development extensions containing a language server are compiled to WebAssembly
 by Zed. Install either Rust through `rustup`, or Homebrew's `rust-wasm` formula,
@@ -76,6 +78,13 @@ The language server itself has no npm dependencies. Run only its tests with:
 node --test language-server/server.test.mjs
 ```
 
+### Manual LiveView event test
+
+Open `examples/events/event_demo.sface` and Cmd-click the `delete` value. Both
+matching `handle_event/3` clauses in `event_demo.ex` are definitions. Run Find
+References on either handler event name to find the direct `.sface` event and
+the `JS.push("delete")` call inside `event_button.ex`.
+
 ## Navigation
 
 Use `Go to Definition` or Cmd-click an identifier in a `.sface` file. The first
@@ -92,6 +101,8 @@ version understands the following project patterns:
 - external templates connected to their owner module by `embed_sface`
 - built-in assigns inherited through `use Surface.LiveView`, resolved to the
   declaration in the installed Surface dependency
+- static LiveView events in `.sface`, `.html.heex`, `~F`, and `~H`, scoped by
+  their LiveView/LiveComponent owner and stateless component call graph
 
 When the same assign is declared for several functions in one module, the
 server prefers the declaration closest to the helper generated for that
@@ -100,7 +111,8 @@ not compile the Mix project or expand macros.
 
 ## Known limitations
 
-- Completion, diagnostics, references, and rename are not implemented yet.
+- Completion, diagnostics, and rename are not implemented yet. References are
+  currently available for statically named LiveView client events.
 - Go-to-definition uses project source and common Surface/Phoenix conventions;
   dynamically generated definitions may not resolve.
 - Unresolved assigns remain unresolved instead of falling back to unrelated

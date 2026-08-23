@@ -4,7 +4,7 @@ use zed_extension_api::{self as zed, Result};
 
 const GITHUB_REPOSITORY: &str = "ebool/zed-surface";
 const SERVER_ASSET: &str = "server.mjs";
-const SERVER_VERSION: &str = "0.0.4";
+const SERVER_VERSION: &str = "0.0.5";
 
 struct SurfaceExtension {
     cached_server_path: Option<PathBuf>,

@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { findDefinitions } from "./server.mjs";
+import { findDefinitions, findReferences } from "./server.mjs";
 
 function fixture(files) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "surface-lsp-"));
@@ -32,6 +32,20 @@ function definition(root, relative, needle, offset = 1) {
 
 function locationPath(entry) {
   return new URL(entry.uri).pathname;
+}
+
+function references(root, relative, needle, offset = 1, includeDeclaration = false) {
+  const filePath = path.join(root, relative);
+  const source = fs.readFileSync(filePath, "utf8");
+  const absolute = source.indexOf(needle) + offset;
+  const before = source.slice(0, absolute).split("\n");
+  return findReferences({
+    root,
+    filePath,
+    source,
+    position: { line: before.length - 1, character: before.at(-1).length },
+    includeDeclaration,
+  });
 }
 
 test("assigns jump to an attr in the module that embeds the template", () => {
@@ -346,6 +360,193 @@ end
   assert.deepEqual(closing, opening);
 });
 
+test("LiveView event values resolve every matching handler clause in their owner", () => {
+  const root = fixture({
+    "lib/page.ex": `defmodule AppWeb.Page do
+  use Phoenix.LiveView
+  embed_sface "page.sface"
+
+  def handle_event("delete", %{"mode" => "edit"}, socket), do: {:noreply, socket}
+  def handle_event("delete", _params, socket), do: {:noreply, socket}
+end
+`,
+    "lib/page.sface": `<button phx-click="delete">Delete</button>
+<button phx-click={"delete"}>Delete expression</button>
+<button phx-click={JS.push("delete")}>Delete with JS</button>
+`,
+  });
+
+  for (const needle of ["\"delete\"", "{\"delete\"}", "JS.push(\"delete\")"]) {
+    const offset = needle.lastIndexOf("delete") + 1;
+    const result = definition(root, "lib/page.sface", needle, offset);
+    assert.equal(result.length, 2, needle);
+    assert.deepEqual(result.map((entry) => entry.range.start.line), [4, 5], needle);
+  }
+});
+
+test("handler references return static event forms and honor includeDeclaration", () => {
+  const root = fixture({
+    "lib/page.ex": `defmodule AppWeb.Page do
+  use Phoenix.LiveView
+  embed_sface "page.sface"
+  def handle_event("delete", _params, socket), do: {:noreply, socket}
+end
+`,
+    "lib/page.sface": `<button phx-click="delete">One</button>
+<button phx-click={"delete"}>Two</button>
+<button phx-click={JS.push("delete")}>Three</button>
+<button phx-click={@dynamic}>Dynamic</button>
+`,
+  });
+
+  const result = references(root, "lib/page.ex", "handle_event(\"delete", 15);
+  assert.equal(result.length, 3);
+  assert.ok(result.every((entry) => locationPath(entry) === path.join(root, "lib/page.sface")));
+
+  const withDeclaration = references(
+    root,
+    "lib/page.ex",
+    "handle_event(\"delete",
+    15,
+    true,
+  );
+  assert.equal(withDeclaration.length, 4);
+  assert.equal(locationPath(withDeclaration.at(-1)), path.join(root, "lib/page.ex"));
+});
+
+test("an event in a stateless function component resolves through its LiveView callers", () => {
+  const root = fixture({
+    "lib/form_entry.ex": `defmodule AppWeb.FormEntry do
+  use Phoenix.LiveView
+  import AppWeb.ServerForm, only: [server_form: 1]
+  embed_sface "form_entry.sface"
+  def handle_event("delete", _params, socket), do: {:noreply, socket}
+end
+`,
+    "lib/form_entry.sface": `<.server_form />`,
+    "lib/server_form.ex": `defmodule AppWeb.ServerForm do
+  use Phoenix.Component
+  def server_form(assigns) do
+    ~H"""
+    <button phx-click="delete">Delete</button>
+    """
+  end
+end
+`,
+  });
+
+  const target = definition(root, "lib/server_form.ex", "phx-click=\"delete", 12);
+  assert.equal(target.length, 1);
+  assert.equal(locationPath(target[0]), path.join(root, "lib/form_entry.ex"));
+  assert.equal(target[0].range.start.line, 4);
+
+  const result = references(root, "lib/form_entry.ex", "handle_event(\"delete", 15);
+  assert.equal(result.length, 1);
+  assert.equal(locationPath(result[0]), path.join(root, "lib/server_form.ex"));
+  assert.equal(result[0].range.start.line, 4);
+});
+
+test("the same event name stays isolated between unrelated LiveView owners", () => {
+  const root = fixture({
+    "lib/one.ex": `defmodule AppWeb.One do
+  use Phoenix.LiveView
+  embed_sface "one.sface"
+  def handle_event("delete", _, socket), do: {:noreply, socket}
+end
+`,
+    "lib/one.sface": `<button phx-click="delete">One</button>`,
+    "lib/two.ex": `defmodule AppWeb.Two do
+  use Phoenix.LiveView
+  embed_sface "two.sface"
+  def handle_event("delete", _, socket), do: {:noreply, socket}
+end
+`,
+    "lib/two.sface": `<button phx-click="delete">Two</button>`,
+  });
+
+  const one = definition(root, "lib/one.sface", "delete");
+  assert.equal(one.length, 1);
+  assert.equal(locationPath(one[0]), path.join(root, "lib/one.ex"));
+  const oneReferences = references(root, "lib/one.ex", "handle_event(\"delete", 15);
+  assert.equal(oneReferences.length, 1);
+  assert.equal(locationPath(oneReferences[0]), path.join(root, "lib/one.sface"));
+});
+
+test("phx-target at myself resolves to the current LiveComponent", () => {
+  const root = fixture({
+    "lib/dialog.ex": `defmodule AppWeb.Dialog do
+  use Phoenix.LiveComponent
+  def render(assigns) do
+    ~H"""
+    <button phx-click="close" phx-target={@myself}>Close</button>
+    """
+  end
+  def handle_event("close", _, socket), do: {:noreply, socket}
+end
+`,
+  });
+
+  const result = definition(root, "lib/dialog.ex", "phx-click=\"close", 12);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].range.start.line, 7);
+});
+
+test("an untargeted LiveComponent event resolves to its parent LiveView", () => {
+  const root = fixture({
+    "lib/page.ex": `defmodule AppWeb.Page do
+  use Phoenix.LiveView
+  alias AppWeb.Dialog
+  embed_sface "page.sface"
+  def handle_event("close", _, socket), do: {:noreply, socket}
+end
+`,
+    "lib/page.sface": `<Dialog />`,
+    "lib/dialog.ex": `defmodule AppWeb.Dialog do
+  use Phoenix.LiveComponent
+  def render(assigns) do
+    ~H"""
+    <button phx-click="close">Close</button>
+    """
+  end
+  def handle_event("close", _, socket), do: {:noreply, socket}
+end
+`,
+  });
+
+  const result = definition(root, "lib/dialog.ex", "phx-click=\"close", 12);
+  assert.equal(result.length, 1);
+  assert.equal(locationPath(result[0]), path.join(root, "lib/page.ex"));
+  assert.equal(result[0].range.start.line, 4);
+});
+
+test("html.heex and Surface sigils participate in event navigation", () => {
+  const root = fixture({
+    "lib/page.ex": `defmodule AppWeb.Page do
+  use Phoenix.LiveView
+  def handle_event("save", _, socket), do: {:noreply, socket}
+end
+`,
+    "lib/page.html.heex": `<form phx-submit="save"></form>`,
+    "lib/surface_page.ex": `defmodule AppWeb.SurfacePage do
+  use Surface.LiveView
+  def render(assigns) do
+    ~F"""
+    <button phx-click={"save"}>Save</button>
+    """
+  end
+  def handle_event("save", _, socket), do: {:noreply, socket}
+end
+`,
+  });
+
+  const heex = definition(root, "lib/page.html.heex", "save");
+  assert.equal(heex.length, 1);
+  assert.equal(locationPath(heex[0]), path.join(root, "lib/page.ex"));
+  const surface = definition(root, "lib/surface_page.ex", "phx-click={\"save", 13);
+  assert.equal(surface.length, 1);
+  assert.equal(locationPath(surface[0]), path.join(root, "lib/surface_page.ex"));
+});
+
 test("the checked-in navigation example resolves every documented link", () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const template = "examples/navigation/navigation_demo.sface";
@@ -356,7 +557,7 @@ test("the checked-in navigation example resolves every documented link", () => {
     ["format_label", "defp format_label"],
     [".badge", "defp badge"],
     ["NavigationDemo.card", "def card"],
-    [":footer", "slot :footer"],
+    [":footer", "slot(:footer)"],
     ["item.name", "item <- @items"],
   ];
 
@@ -367,4 +568,33 @@ test("the checked-in navigation example resolves every documented link", () => {
     const targetLine = fs.readFileSync(targetPath, "utf8").split(/\r?\n/)[result[0].range.start.line];
     assert.match(targetLine, new RegExp(targetNeedle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), sourceNeedle);
   }
+});
+
+test("the checked-in event example supports definition and references", () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const target = definition(
+    root,
+    "examples/events/event_demo.sface",
+    "phx-click=\"delete",
+    12,
+  );
+  assert.equal(target.length, 2);
+  assert.ok(target.every((entry) =>
+    locationPath(entry) === path.join(root, "examples/events/event_demo.ex"),
+  ));
+
+  const result = references(
+    root,
+    "examples/events/event_demo.ex",
+    "handle_event(\"delete",
+    15,
+  );
+  assert.equal(result.length, 2);
+  assert.deepEqual(
+    new Set(result.map(locationPath)),
+    new Set([
+      path.join(root, "examples/events/event_demo.sface"),
+      path.join(root, "examples/events/event_button.ex"),
+    ]),
+  );
 });

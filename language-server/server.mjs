@@ -60,6 +60,33 @@ function walkElixirFiles(root) {
   return files;
 }
 
+function walkTemplateFiles(root) {
+  const files = [];
+  const pending = [root];
+
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!IGNORED_DIRECTORIES.has(entry.name)) {
+          pending.push(path.join(directory, entry.name));
+        }
+      } else if (entry.isFile() && (entry.name.endsWith(".sface") || entry.name.endsWith(".html.heex"))) {
+        files.push(path.join(directory, entry.name));
+      }
+    }
+  }
+
+  return files;
+}
+
 function readSource(filePath, openDocuments) {
   const open = openDocuments?.get(pathToUri(filePath));
   if (open !== undefined) return open;
@@ -78,6 +105,7 @@ function parseElixirFile(filePath, source) {
   const imports = [];
   const aliases = [];
   const uses = [];
+  const eventHandlers = [];
 
   lines.forEach((lineText, line) => {
     let match = lineText.match(/\bembed_sface\s*(?:\(\s*)?["']([^"']+)["']/);
@@ -121,7 +149,29 @@ function parseElixirFile(filePath, source) {
     }
   });
 
-  return { filePath, module: moduleMatch?.[1], lines, embeds, definitions, imports, aliases, uses };
+  for (const match of source.matchAll(/^[ \t]*defp?\s+handle_event\s*\(\s*["']([^"']+)["']/gm)) {
+    const name = match[1];
+    const startOffset = match.index + match[0].lastIndexOf(name);
+    const before = source.slice(0, startOffset).split("\n");
+    eventHandlers.push({
+      name,
+      line: before.length - 1,
+      start: before.at(-1).length,
+    });
+  }
+
+  return {
+    filePath,
+    module: moduleMatch?.[1],
+    source,
+    lines,
+    embeds,
+    definitions,
+    imports,
+    aliases,
+    uses,
+    eventHandlers,
+  };
 }
 
 function indexWorkspace(root, openDocuments = new Map()) {
@@ -138,7 +188,7 @@ function templateOwners(index, templatePath) {
   const embedded = index.filter((file) => file.embeds.some((entry) => entry.template === normalized));
   if (embedded.length > 0) return embedded;
 
-  const sibling = normalized.replace(/\.sface$/, ".ex");
+  const sibling = normalized.replace(/(?:\.sface|\.html\.heex)$/, ".ex");
   return index.filter((file) => file.filePath === sibling);
 }
 
@@ -602,11 +652,220 @@ function namedSlotDefinitions(index, owners, token) {
   );
 }
 
+const LIVE_VIEW_EVENT_ATTRIBUTES = [
+  "click",
+  "submit",
+  "change",
+  "blur",
+  "focus",
+  "keydown",
+  "keyup",
+  "window-keydown",
+  "window-keyup",
+];
+
+function positionAtOffset(source, offset) {
+  const before = source.slice(0, offset).split("\n");
+  return { line: before.length - 1, character: before.at(-1).length };
+}
+
+function eventReferencesInRegion(filePath, fullSource, regionSource, baseOffset, containers) {
+  const attributes = LIVE_VIEW_EVENT_ATTRIBUTES.join("|");
+  const pattern = new RegExp(
+    `\\b(phx-(?:${attributes}))\\s*=\\s*(?:"([^"]+)"|'([^']+)'|\\{\\s*"([^"]+)"\\s*\\}|\\{\\s*'([^']+)'\\s*\\}|\\{\\s*(?:Phoenix\\.LiveView\\.)?JS\\.push\\s*\\(\\s*"([^"]+)")`,
+    "g",
+  );
+  const results = [];
+
+  for (const match of regionSource.matchAll(pattern)) {
+    const name = match.slice(2).find((value) => value !== undefined);
+    if (!name) continue;
+    const equals = match[0].indexOf("=");
+    let relativeName = match[0].indexOf(`"${name}"`, equals);
+    if (relativeName === -1) relativeName = match[0].indexOf(`'${name}'`, equals);
+    if (relativeName === -1) continue;
+    relativeName += 1;
+
+    const tagStart = regionSource.lastIndexOf("<", match.index);
+    const tagEnd = tagStart === -1 ? -1 : openingTagEnd(regionSource, tagStart);
+    const opening = tagStart === -1 ? "" : regionSource.slice(tagStart, tagEnd + 1);
+    let target = "default";
+    if (/\bphx-target\s*=/.test(opening)) {
+      target = /\bphx-target\s*=\s*\{\s*@myself\s*\}/.test(opening)
+        ? "myself"
+        : "dynamic";
+    }
+
+    const offset = baseOffset + match.index + relativeName;
+    const position = positionAtOffset(fullSource, offset);
+    results.push({
+      name,
+      attribute: match[1],
+      filePath,
+      line: position.line,
+      start: position.character,
+      target,
+      containers,
+    });
+  }
+
+  return results;
+}
+
+function inlineTemplateRegions(file) {
+  const regions = [];
+  for (const match of file.source.matchAll(/~[FH]"""([\s\S]*?)"""/g)) {
+    const source = match[1];
+    const baseOffset = match.index + match[0].indexOf(source);
+    regions.push({ source, baseOffset });
+  }
+  return regions;
+}
+
+function componentFilesForToken(index, callers, token) {
+  if (token.kind === "remote_component") {
+    return componentModuleFiles(index, callers, token.module);
+  }
+  if (token.kind === "local_component") {
+    return localComponentFiles(index, callers, token.name);
+  }
+  return componentModuleFiles(index, callers, token.module);
+}
+
+function addComponentCalls(index, reverseGraph, source, callers) {
+  for (const match of source.matchAll(/<(\.[a-zA-Z_]\w*[!?]?|[A-Z][\w.]*)\b/g)) {
+    const token = componentToken(match[1]);
+    for (const caller of callers) {
+      for (const callee of componentFilesForToken(index, [caller], token)) {
+        if (callee.filePath === caller.filePath) continue;
+        if (!reverseGraph.has(callee.filePath)) reverseGraph.set(callee.filePath, new Set());
+        reverseGraph.get(callee.filePath).add(caller.filePath);
+      }
+    }
+  }
+}
+
+function fileUsesAnyModule(index, file, moduleNames) {
+  return moduleNames.some((moduleName) => ownersUseModule(index, [file], moduleName));
+}
+
+function isLiveView(index, file) {
+  return fileUsesAnyModule(index, file, ["Phoenix.LiveView", "Surface.LiveView"]);
+}
+
+function isLiveComponent(index, file) {
+  return fileUsesAnyModule(index, file, ["Phoenix.LiveComponent", "Surface.LiveComponent"]);
+}
+
+function closestStatefulOwners(index, reverseGraph, containers, predicate) {
+  let frontier = [...new Set(containers.map((file) => file.filePath))];
+  const visited = new Set();
+
+  while (frontier.length > 0) {
+    const files = frontier
+      .filter((filePath) => !visited.has(filePath))
+      .map((filePath) => index.find((file) => file.filePath === filePath))
+      .filter(Boolean);
+    for (const file of files) visited.add(file.filePath);
+    const matches = files.filter((file) => predicate(index, file));
+    if (matches.length > 0) return matches;
+    frontier = files.flatMap((file) => [...(reverseGraph.get(file.filePath) ?? [])]);
+  }
+
+  return [];
+}
+
+function buildLiveViewEventIndex(root, index, openDocuments) {
+  const references = [];
+  const reverseGraph = new Map();
+
+  for (const templatePath of walkTemplateFiles(root)) {
+    const source = readSource(templatePath, openDocuments);
+    if (source === null) continue;
+    const containers = templateOwners(index, templatePath);
+    references.push(...eventReferencesInRegion(templatePath, source, source, 0, containers));
+    addComponentCalls(index, reverseGraph, source, containers);
+  }
+
+  for (const file of index) {
+    for (const region of inlineTemplateRegions(file)) {
+      references.push(...eventReferencesInRegion(
+        file.filePath,
+        file.source,
+        region.source,
+        region.baseOffset,
+        [file],
+      ));
+      addComponentCalls(index, reverseGraph, region.source, [file]);
+    }
+  }
+
+  for (const reference of references) {
+    if (reference.target === "dynamic") {
+      reference.owners = [];
+    } else if (reference.target === "myself") {
+      reference.owners = closestStatefulOwners(
+        index,
+        reverseGraph,
+        reference.containers,
+        isLiveComponent,
+      );
+    } else {
+      reference.owners = closestStatefulOwners(
+        index,
+        reverseGraph,
+        reference.containers,
+        isLiveView,
+      );
+    }
+  }
+
+  return { references, reverseGraph };
+}
+
+function eventReferenceAt(eventIndex, filePath, position) {
+  return eventIndex.references.find((reference) =>
+    reference.filePath === filePath &&
+    reference.line === position.line &&
+    position.character >= reference.start &&
+    position.character <= reference.start + reference.name.length,
+  );
+}
+
+function eventHandlerAt(file, position) {
+  return file?.eventHandlers.find((handler) =>
+    handler.line === position.line &&
+    position.character >= handler.start &&
+    position.character <= handler.start + handler.name.length,
+  );
+}
+
+function eventHandlerLocations(owners, name) {
+  return owners.flatMap((owner) => owner.eventHandlers
+    .filter((handler) => handler.name === name)
+    .map((handler) => location(owner.filePath, handler.line, handler.start, name.length)));
+}
+
 export function findDefinitions({ root, filePath, source, position, openDocuments = new Map() }) {
+  const index = indexWorkspace(root, openDocuments);
+  const localEvent = eventReferenceAt(
+    { references: eventReferencesInRegion(filePath, source, source, 0, []) },
+    filePath,
+    position,
+  );
+  if (localEvent) {
+    const eventIndex = buildLiveViewEventIndex(root, index, openDocuments);
+    const eventReference = eventReferenceAt(eventIndex, filePath, position);
+    if (eventReference) {
+      return deduplicate(eventHandlerLocations(eventReference.owners, eventReference.name));
+    }
+    return [];
+  }
+
+  if (!filePath.endsWith(".sface")) return [];
+
   const token = tokenAt(source, position);
   if (!token) return [];
-
-  const index = indexWorkspace(root, openDocuments);
   const owners = templateOwners(index, filePath);
 
   if (token.kind === "local_variable") {
@@ -676,6 +935,39 @@ export function findDefinitions({ root, filePath, source, position, openDocument
   });
 }
 
+export function findReferences({
+  root,
+  filePath,
+  source,
+  position,
+  includeDeclaration = false,
+  openDocuments = new Map(),
+}) {
+  const index = indexWorkspace(root, openDocuments);
+  const owner = index.find((file) => file.filePath === filePath) ??
+    (/\.exs?$/.test(filePath) ? parseElixirFile(filePath, source) : null);
+  const handler = eventHandlerAt(owner, position);
+  if (!owner?.module || !handler) return [];
+
+  const eventIndex = buildLiveViewEventIndex(root, index, openDocuments);
+  const references = eventIndex.references
+    .filter((reference) =>
+      reference.name === handler.name &&
+      reference.owners.some((candidate) => candidate.module === owner.module),
+    )
+    .map((reference) => location(
+      reference.filePath,
+      reference.line,
+      reference.start,
+      reference.name.length,
+    ));
+
+  if (includeDeclaration) {
+    references.push(...eventHandlerLocations([owner], handler.name));
+  }
+  return deduplicate(references);
+}
+
 const documents = new Map();
 let workspaceRoot = process.cwd();
 
@@ -695,9 +987,10 @@ function handle(message) {
     respond(message.id, {
       capabilities: {
         definitionProvider: true,
+        referencesProvider: true,
         textDocumentSync: { openClose: true, change: 1 },
       },
-      serverInfo: { name: "surface-language-server", version: "0.0.4" },
+      serverInfo: { name: "surface-language-server", version: "0.0.5" },
     });
     return;
   }
@@ -734,6 +1027,21 @@ function handle(message) {
       filePath,
       source,
       position: message.params.position,
+      openDocuments: documents,
+    }));
+    return;
+  }
+
+  if (message.method === "textDocument/references") {
+    const uri = message.params.textDocument.uri;
+    const filePath = uriToPath(uri);
+    const source = documents.get(uri) ?? fs.readFileSync(filePath, "utf8");
+    respond(message.id, findReferences({
+      root: workspaceRoot,
+      filePath,
+      source,
+      position: message.params.position,
+      includeDeclaration: message.params.context?.includeDeclaration ?? false,
       openDocuments: documents,
     }));
     return;

@@ -1,6 +1,6 @@
 id = "surface"
 name = "Surface"
-version = "0.0.4"
+version = "0.0.5"
 schema_version = 1
 authors = ["42mon <42mon@users.noreply.github.com>"]
 description = "Surface template language support for Zed"
@@ -8,10 +8,12 @@ repository = "https://github.com/ebool/zed-surface"
 
 [language_servers.surface-language-server]
 name = "Surface Language Server"
-languages = ["Surface"]
+languages = ["Surface", "Elixir", "HEEx"]
 
 [language_servers.surface-language-server.language_ids]
 Surface = "surface"
+Elixir = "elixir"
+HEEx = "heex"
 
 [grammars.surface]
 repository = "https://github.com/ebool/zed-surface"
