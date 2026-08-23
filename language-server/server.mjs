@@ -265,7 +265,12 @@ function componentModuleFiles(index, owners, requested) {
   );
 }
 
-function declarationsForFunction(files, functionName, attributeName) {
+function declarationsForFunction(
+  files,
+  functionName,
+  declarationName,
+  kinds = new Set(["attr", "prop"]),
+) {
   const results = [];
   for (const file of files) {
     const functions = file.definitions.filter((definition) => definition.kind === "function");
@@ -275,14 +280,14 @@ function declarationsForFunction(files, functionName, attributeName) {
         .at(-1);
       const declaration = file.definitions
         .filter((definition) =>
-          new Set(["attr", "prop"]).has(definition.kind) &&
-          definition.name === attributeName &&
+          kinds.has(definition.kind) &&
+          definition.name === declarationName &&
           definition.line < target.line &&
           definition.line > (previousFunction?.line ?? -1),
         )
         .at(-1);
       if (declaration) {
-        results.push(location(file.filePath, declaration.line, declaration.start, attributeName.length));
+        results.push(location(file.filePath, declaration.line, declaration.start, declarationName.length));
       }
     }
   }
@@ -383,6 +388,80 @@ function componentAttributeAt(source, position) {
   return null;
 }
 
+function tagAt(source, start) {
+  if (source.startsWith("<!--", start)) {
+    const commentEnd = source.indexOf("-->", start + 4);
+    return { end: commentEnd === -1 ? source.length - 1 : commentEnd + 2 };
+  }
+
+  if (!/^<\s*\/?\s*[:.a-zA-Z_]/.test(source.slice(start, start + 8))) {
+    return { end: start };
+  }
+
+  const end = openingTagEnd(source, start);
+  const text = source.slice(start, end + 1);
+  const match = text.match(/^<\s*(\/?)\s*([:.a-zA-Z_][\w.:-]*)/);
+  if (!match) return { end };
+  return {
+    end,
+    closing: match[1] === "/",
+    name: match[2],
+    selfClosing: /\/\s*>$/.test(text),
+  };
+}
+
+function openTagStackBefore(source, limit) {
+  const stack = [];
+  let cursor = 0;
+
+  while (cursor < limit) {
+    const start = source.indexOf("<", cursor);
+    if (start === -1 || start >= limit) break;
+    const tag = tagAt(source, start);
+    cursor = Math.max(tag.end + 1, start + 1);
+    if (!tag.name || tag.name.startsWith("!")) continue;
+
+    if (tag.closing) {
+      const matching = stack.map((entry) => entry.name).lastIndexOf(tag.name);
+      if (matching !== -1) stack.splice(matching);
+      continue;
+    }
+
+    const component = tag.name.startsWith(":") ? null : (
+      tag.name.startsWith(".") || /^[A-Z]/.test(tag.name)
+        ? componentToken(tag.name)
+        : null
+    );
+    const parentComponent = tag.name.startsWith(":")
+      ? [...stack].reverse().find((entry) => entry.component)?.component ?? null
+      : null;
+    if (!tag.selfClosing) stack.push({ name: tag.name, component, parentComponent });
+  }
+
+  return stack;
+}
+
+function namedSlotAt(source, position) {
+  const line = source.split(/\r?\n/)[position.line] ?? "";
+  const character = Math.min(position.character, line.length);
+  for (const match of line.matchAll(/<\/?\s*:([a-zA-Z_]\w*[!?-]?)/g)) {
+    const name = match[1];
+    const start = match.index + match[0].lastIndexOf(name);
+    if (character < start || character > start + name.length) continue;
+
+    const tagStart = absolutePosition(source, { line: position.line, character: match.index });
+    const stack = openTagStackBefore(source, tagStart);
+    const closing = /^<\//.test(match[0]);
+    const slotEntry = closing
+      ? [...stack].reverse().find((entry) => entry.name === `:${name}`)
+      : null;
+    const component = slotEntry?.parentComponent ??
+      [...stack].reverse().find((entry) => entry.component)?.component;
+    if (component) return { kind: "named_slot", name, component };
+  }
+  return null;
+}
+
 function tokenAt(source, position) {
   const line = source.split(/\r?\n/)[position.line] ?? "";
   const character = Math.min(position.character, line.length);
@@ -395,6 +474,9 @@ function tokenAt(source, position) {
 
   const attribute = componentAttributeAt(source, position);
   if (attribute) return attribute;
+
+  const namedSlot = namedSlotAt(source, position);
+  if (namedSlot) return namedSlot;
 
   for (const match of line.matchAll(/<\/?(\.[a-zA-Z_]\w*[!?]?|[A-Z][\w.]*)/g)) {
     const start = match.index + match[0].indexOf(match[1]);
@@ -495,6 +577,31 @@ function componentAttributeDefinitions(index, owners, token) {
   );
 }
 
+function namedSlotDefinitions(index, owners, token) {
+  const component = token.component;
+  if (component.kind === "remote_component") {
+    return declarationsForFunction(
+      componentModuleFiles(index, owners, component.module),
+      component.name,
+      token.name,
+      new Set(["slot"]),
+    );
+  }
+  if (component.kind === "local_component") {
+    return declarationsForFunction(
+      localComponentFiles(index, owners, component.name),
+      component.name,
+      token.name,
+      new Set(["slot"]),
+    );
+  }
+  return locationsForDefinitions(
+    componentModuleFiles(index, owners, component.module),
+    token.name,
+    new Set(["slot"]),
+  );
+}
+
 export function findDefinitions({ root, filePath, source, position, openDocuments = new Map() }) {
   const token = tokenAt(source, position);
   if (!token) return [];
@@ -522,6 +629,10 @@ export function findDefinitions({ root, filePath, source, position, openDocument
 
   if (token.kind === "component_attribute") {
     return deduplicate(componentAttributeDefinitions(index, owners, token));
+  }
+
+  if (token.kind === "named_slot") {
+    return deduplicate(namedSlotDefinitions(index, owners, token));
   }
 
   if (token.kind === "local_component") {
@@ -586,7 +697,7 @@ function handle(message) {
         definitionProvider: true,
         textDocumentSync: { openClose: true, change: 1 },
       },
-      serverInfo: { name: "surface-language-server", version: "0.0.3" },
+      serverInfo: { name: "surface-language-server", version: "0.0.4" },
     });
     return;
   }

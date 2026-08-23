@@ -6,7 +6,9 @@
 <section id={@id} :attrs={@rest}>
   <h1>{format_label(@title)}</h1>
 
-  <NavigationDemo.card title={@title} />
+  <NavigationDemo.card title={@title}>
+    <:footer>{@title}</:footer>
+  </NavigationDemo.card>
   <.badge label={@title} />
 
   <ul>

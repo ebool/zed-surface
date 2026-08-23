@@ -253,6 +253,99 @@ end
   assert.deepEqual(definition(root, "lib/page.sface", "@flash"), []);
 });
 
+test("a named slot resolves only against its remote parent component contract", () => {
+  const root = fixture({
+    "lib/page.ex": `defmodule AppWeb.Page do
+  alias AppWeb.Layouts
+  embed_sface "page.sface"
+end
+`,
+    "lib/page.sface": `<Layouts.sidebar>
+  <:context_footer>Footer</:context_footer>
+</Layouts.sidebar>
+
+<Layouts.dialog>
+  <:context_footer>Dialog footer</:context_footer>
+</Layouts.dialog>
+`,
+    "lib/layouts.ex": `defmodule AppWeb.Layouts do
+  slot :context_footer, doc: "Sidebar footer"
+  def sidebar(assigns), do: assigns
+
+  slot :context_footer, doc: "Dialog footer"
+  def dialog(assigns), do: assigns
+end
+`,
+  });
+
+  const first = definition(root, "lib/page.sface", ":context_footer", 2);
+  const second = definition(
+    root,
+    "lib/page.sface",
+    ":context_footer>Dialog",
+    2,
+  );
+  assert.equal(first.length, 1);
+  assert.equal(first[0].range.start.line, 1);
+  assert.equal(second.length, 1);
+  assert.equal(second[0].range.start.line, 4);
+});
+
+test("a named slot in a Surface component resolves to slot name syntax", () => {
+  const root = fixture({
+    "lib/page.ex": `defmodule AppWeb.Page do
+  alias AppWeb.Card
+  embed_sface "page.sface"
+end
+`,
+    "lib/page.sface": `<Card><:footer>Footer</:footer></Card>`,
+    "lib/card.ex": `defmodule AppWeb.Card do
+  use Surface.Component
+  slot footer
+  def render(assigns), do: assigns
+end
+`,
+  });
+
+  const result = definition(root, "lib/page.sface", ":footer", 2);
+  assert.equal(result.length, 1);
+  assert.equal(locationPath(result[0]), path.join(root, "lib/card.ex"));
+  assert.equal(result[0].range.start.line, 2);
+});
+
+test("a local component named slot resolves through scoped imports", () => {
+  const root = fixture({
+    "lib/app_web.ex": `defmodule AppWeb do
+  def components do
+    quote do
+      import AppWeb.Dialogs
+    end
+  end
+end
+`,
+    "lib/page.ex": `defmodule AppWeb.Page do
+  use AppWeb, :components
+  embed_sface "page.sface"
+end
+`,
+    "lib/page.sface": `<.dialog>
+  <:footer>Footer</:footer>
+</.dialog>
+`,
+    "lib/dialogs.ex": `defmodule AppWeb.Dialogs do
+  slot :footer
+  def dialog(assigns), do: assigns
+end
+`,
+  });
+
+  const opening = definition(root, "lib/page.sface", ":footer", 2);
+  const closing = definition(root, "lib/page.sface", "/:footer", 3);
+  assert.equal(opening.length, 1);
+  assert.equal(opening[0].range.start.line, 1);
+  assert.deepEqual(closing, opening);
+});
+
 test("the checked-in navigation example resolves every documented link", () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const template = "examples/navigation/navigation_demo.sface";
@@ -263,6 +356,7 @@ test("the checked-in navigation example resolves every documented link", () => {
     ["format_label", "defp format_label"],
     [".badge", "defp badge"],
     ["NavigationDemo.card", "def card"],
+    [":footer", "slot :footer"],
     ["item.name", "item <- @items"],
   ];
 

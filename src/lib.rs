@@ -4,6 +4,7 @@ use zed_extension_api::{self as zed, Result};
 
 const GITHUB_REPOSITORY: &str = "ebool/zed-surface";
 const SERVER_ASSET: &str = "server.mjs";
+const SERVER_VERSION: &str = "0.0.4";
 
 struct SurfaceExtension {
     cached_server_path: Option<PathBuf>,
@@ -17,6 +18,16 @@ impl SurfaceExtension {
             .filter(|path| fs::metadata(path).is_ok_and(|metadata| metadata.is_file()))
         {
             return Ok(path.clone());
+        }
+
+        let work_directory = env::current_dir()
+            .map_err(|error| format!("failed to find the extension work directory: {error}"))?;
+        let expected_path = work_directory
+            .join(format!("surface-language-server-{SERVER_VERSION}"))
+            .join(SERVER_ASSET);
+        if fs::metadata(&expected_path).is_ok_and(|metadata| metadata.is_file()) {
+            self.cached_server_path = Some(expected_path.clone());
+            return Ok(expected_path);
         }
 
         zed::set_language_server_installation_status(
@@ -42,9 +53,7 @@ impl SurfaceExtension {
                 )
             })?;
         let version_directory = format!("surface-language-server-{}", release.version);
-        let install_directory = env::current_dir()
-            .map_err(|error| format!("failed to find the extension work directory: {error}"))?
-            .join(version_directory);
+        let install_directory = work_directory.join(version_directory);
         let path = install_directory.join(SERVER_ASSET);
 
         if !fs::metadata(&path).is_ok_and(|metadata| metadata.is_file()) {

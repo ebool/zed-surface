@@ -10,6 +10,7 @@ defmodule ZedSurface.NavigationDemo do
 
   def render(assigns), do: navigation_demo(assigns)
 
+  slot :footer
   def card(assigns), do: assigns
 
   defp badge(assigns), do: assigns

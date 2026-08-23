@@ -67,6 +67,7 @@ identifier (or run `editor: go to definition`). The fixture covers:
   Elixir module
 - `format_label` and `<.badge>` jumping to local functions
 - `<NavigationDemo.card>` jumping to the module component function
+- `<:footer>` jumping to the `slot :footer` contract of its parent component
 - `item.name` jumping to the `item <- @items` binding
 
 The language server itself has no npm dependencies. Run only its tests with:
@@ -83,6 +84,8 @@ version understands the following project patterns:
 - `@name` to `attr`, `prop`, `data`, `slot`, `assign`, `assign_new`, or `stream`
 - component attributes such as `flash=` to the `attr` or `prop` contract attached
   to the resolved component function
+- named entries such as `<:footer>` to the `slot` contract attached to their
+  nearest parent component
 - local variables such as `item` in `item <- @items` and `:let={item}`
 - `<.function_component>` and functions called inside `{expressions}`
 - `<Layouts.app>` and module components such as `<Card>`
