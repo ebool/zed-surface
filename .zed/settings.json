@@ -4,14 +4,20 @@
       "language_servers": [
         "surface-language-server",
         "!elixir-ls",
-        "..."
+        "!dexter",
+        "!expert",
+        "!next-ls",
+        "!lexical"
       ]
     },
     "HEEx": {
       "language_servers": [
         "surface-language-server",
         "!elixir-ls",
-        "..."
+        "!dexter",
+        "!expert",
+        "!next-ls",
+        "!lexical"
       ]
     }
   }

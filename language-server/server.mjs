@@ -846,15 +846,41 @@ function eventHandlerLocations(owners, name) {
     .map((handler) => location(owner.filePath, handler.line, handler.start, name.length)));
 }
 
-export function findDefinitions({ root, filePath, source, position, openDocuments = new Map() }) {
-  const index = indexWorkspace(root, openDocuments);
+export function createWorkspaceAnalysis(root, openDocuments = new Map()) {
+  return {
+    root,
+    openDocuments,
+    index: indexWorkspace(root, openDocuments),
+    eventIndex: null,
+  };
+}
+
+function liveViewEvents(analysis) {
+  analysis.eventIndex ??= buildLiveViewEventIndex(
+    analysis.root,
+    analysis.index,
+    analysis.openDocuments,
+  );
+  return analysis.eventIndex;
+}
+
+export function findDefinitions({
+  root,
+  filePath,
+  source,
+  position,
+  openDocuments = new Map(),
+  analysis = null,
+}) {
+  const workspace = analysis ?? createWorkspaceAnalysis(root, openDocuments);
+  const index = workspace.index;
   const localEvent = eventReferenceAt(
     { references: eventReferencesInRegion(filePath, source, source, 0, []) },
     filePath,
     position,
   );
   if (localEvent) {
-    const eventIndex = buildLiveViewEventIndex(root, index, openDocuments);
+    const eventIndex = liveViewEvents(workspace);
     const eventReference = eventReferenceAt(eventIndex, filePath, position);
     if (eventReference) {
       return deduplicate(eventHandlerLocations(eventReference.owners, eventReference.name));
@@ -942,14 +968,16 @@ export function findReferences({
   position,
   includeDeclaration = false,
   openDocuments = new Map(),
+  analysis = null,
 }) {
-  const index = indexWorkspace(root, openDocuments);
+  const workspace = analysis ?? createWorkspaceAnalysis(root, openDocuments);
+  const index = workspace.index;
   const owner = index.find((file) => file.filePath === filePath) ??
     (/\.exs?$/.test(filePath) ? parseElixirFile(filePath, source) : null);
   const handler = eventHandlerAt(owner, position);
   if (!owner?.module || !handler) return [];
 
-  const eventIndex = buildLiveViewEventIndex(root, index, openDocuments);
+  const eventIndex = liveViewEvents(workspace);
   const references = eventIndex.references
     .filter((reference) =>
       reference.name === handler.name &&
@@ -970,6 +998,31 @@ export function findReferences({
 
 const documents = new Map();
 let workspaceRoot = process.cwd();
+let workspaceAnalysis = null;
+let prewarmTimer = null;
+
+function invalidateWorkspaceAnalysis() {
+  workspaceAnalysis = null;
+  if (prewarmTimer !== null) clearTimeout(prewarmTimer);
+  prewarmTimer = null;
+}
+
+function currentWorkspaceAnalysis() {
+  workspaceAnalysis ??= createWorkspaceAnalysis(workspaceRoot, documents);
+  return workspaceAnalysis;
+}
+
+function scheduleWorkspacePrewarm() {
+  if (prewarmTimer !== null) clearTimeout(prewarmTimer);
+  prewarmTimer = setTimeout(() => {
+    prewarmTimer = null;
+    try {
+      liveViewEvents(currentWorkspaceAnalysis());
+    } catch (error) {
+      process.stderr.write(`failed to prewarm Surface workspace: ${error.stack ?? error}\n`);
+    }
+  }, 100);
+}
 
 function send(message) {
   const body = JSON.stringify(message);
@@ -984,13 +1037,14 @@ function handle(message) {
   if (message.method === "initialize") {
     const rootUri = message.params?.workspaceFolders?.[0]?.uri ?? message.params?.rootUri;
     if (rootUri) workspaceRoot = uriToPath(rootUri);
+    invalidateWorkspaceAnalysis();
     respond(message.id, {
       capabilities: {
         definitionProvider: true,
         referencesProvider: true,
         textDocumentSync: { openClose: true, change: 1 },
       },
-      serverInfo: { name: "surface-language-server", version: "0.0.5" },
+      serverInfo: { name: "surface-language-server", version: "0.0.6" },
     });
     return;
   }
@@ -1004,17 +1058,23 @@ function handle(message) {
 
   if (message.method === "textDocument/didOpen") {
     documents.set(message.params.textDocument.uri, message.params.textDocument.text);
+    invalidateWorkspaceAnalysis();
+    scheduleWorkspacePrewarm();
     return;
   }
 
   if (message.method === "textDocument/didChange") {
     const change = message.params.contentChanges.at(-1);
     if (change?.text !== undefined) documents.set(message.params.textDocument.uri, change.text);
+    invalidateWorkspaceAnalysis();
+    scheduleWorkspacePrewarm();
     return;
   }
 
   if (message.method === "textDocument/didClose") {
     documents.delete(message.params.textDocument.uri);
+    invalidateWorkspaceAnalysis();
+    scheduleWorkspacePrewarm();
     return;
   }
 
@@ -1028,6 +1088,7 @@ function handle(message) {
       source,
       position: message.params.position,
       openDocuments: documents,
+      analysis: currentWorkspaceAnalysis(),
     }));
     return;
   }
@@ -1043,6 +1104,7 @@ function handle(message) {
       position: message.params.position,
       includeDeclaration: message.params.context?.includeDeclaration ?? false,
       openDocuments: documents,
+      analysis: currentWorkspaceAnalysis(),
     }));
     return;
   }
