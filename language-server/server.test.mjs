@@ -267,6 +267,121 @@ end
   assert.deepEqual(definition(root, "lib/page.sface", "@flash"), []);
 });
 
+test("LiveView assigns resolve through router scope and live_session on_mount", () => {
+  const root = fixture({
+    "lib/home_entry.ex": `defmodule AppWeb.Pages.Root.HomeEntry do
+  use Surface.LiveView
+  embed_sface "home_entry.sface"
+end
+`,
+    "lib/home_entry.sface": `<Layouts.sidebar current_user={@current_user} scope={@scope} />`,
+    "lib/router.ex": `defmodule AppWeb.Router do
+  use Phoenix.Router
+
+  scope "/", AppWeb do
+    live_session :authenticated,
+      on_mount: AppWeb.AccessSession do
+      live "/", Pages.Root.HomeEntry
+    end
+  end
+end
+`,
+    "lib/access_session.ex": `defmodule AppWeb.AccessSession do
+  def on_mount(:default, _params, _session, socket) do
+    socket =
+      socket
+      |> assign(:current_user, user)
+      |> assign(:scope, scope)
+    {:cont, socket}
+  end
+end
+`,
+  });
+
+  const currentUser = definition(root, "lib/home_entry.sface", "@current_user");
+  const scope = definition(root, "lib/home_entry.sface", "@scope");
+  assert.equal(currentUser.length, 1);
+  assert.equal(locationPath(currentUser[0]), path.join(root, "lib/access_session.ex"));
+  assert.equal(currentUser[0].range.start.line, 4);
+  assert.equal(scope.length, 1);
+  assert.equal(scope[0].range.start.line, 5);
+});
+
+test("on_mount hooks support tuple and list declarations plus assign call forms", () => {
+  const root = fixture({
+    "lib/home.ex": `defmodule AppWeb.Home do
+  use Phoenix.LiveView
+  embed_sface "home.sface"
+end
+`,
+    "lib/home.sface": `{@current_user} {@profile} {@count} {@locale} {@scope} {@theme}`,
+    "lib/router.ex": `defmodule AppWeb.Router do
+  live_session :authenticated,
+    on_mount: [{AppWeb.Auth, :user}, AppWeb.Locale] do
+    live "/", AppWeb.Home
+  end
+end
+`,
+    "lib/auth.ex": `defmodule AppWeb.Auth do
+  def on_mount(:user, _params, _session, socket) do
+    socket
+    |> assign(current_user: user)
+    |> assign_new(:profile, fn -> profile end)
+    |> update(:count, &(&1 + 1))
+    |> assign(%{scope: scope, theme: theme})
+  end
+
+  def on_mount(:admin, _params, _session, socket) do
+    assign(socket, :current_user, wrong_user)
+  end
+end
+`,
+    "lib/locale.ex": `defmodule AppWeb.Locale do
+  def on_mount(:default, _params, _session, socket) do
+    assign(socket, %{locale: "ko"})
+  end
+end
+`,
+  });
+
+  const expected = new Map([
+    ["@current_user", ["lib/auth.ex", 3]],
+    ["@profile", ["lib/auth.ex", 4]],
+    ["@count", ["lib/auth.ex", 5]],
+    ["@scope", ["lib/auth.ex", 6]],
+    ["@theme", ["lib/auth.ex", 6]],
+    ["@locale", ["lib/locale.ex", 2]],
+  ]);
+  for (const [assign, [target, line]] of expected) {
+    const result = definition(root, "lib/home.sface", assign);
+    assert.equal(result.length, 1, assign);
+    assert.equal(locationPath(result[0]), path.join(root, target), assign);
+    assert.equal(result[0].range.start.line, line, assign);
+  }
+});
+
+test("local callback assigns are ordered before updates and stay owner-scoped", () => {
+  const root = fixture({
+    "lib/page.ex": `defmodule AppWeb.Page do
+  use Phoenix.LiveView
+  embed_sface "page.sface"
+  def handle_event("refresh", _, socket), do: {:noreply, assign(socket, :user, updated)}
+  def mount(_, _, socket), do: {:ok, assign(socket, :user, initial)}
+end
+`,
+    "lib/page.sface": `{@user}`,
+    "lib/other.ex": `defmodule AppWeb.Other do
+  def mount(_, _, socket), do: {:ok, assign(socket, :user, wrong)}
+end
+`,
+  });
+
+  const result = definition(root, "lib/page.sface", "@user");
+  assert.equal(result.length, 2);
+  assert.deepEqual(result.map((entry) => entry.range.start.line), [4, 3]);
+  assert.ok(result.every((entry) => locationPath(entry) === path.join(root, "lib/page.ex")));
+});
+
 test("a named slot resolves only against its remote parent component contract", () => {
   const root = fixture({
     "lib/page.ex": `defmodule AppWeb.Page do

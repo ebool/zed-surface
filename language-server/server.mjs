@@ -97,6 +97,190 @@ function readSource(filePath, openDocuments) {
   }
 }
 
+function matchingDelimiter(source, start, open = "(", close = ")") {
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === open) depth += 1;
+    else if (character === close) {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function topLevelSegments(source, baseOffset = 0) {
+  const segments = [];
+  let start = 0;
+  let quote = null;
+  let escaped = false;
+  const depths = { "(": 0, "[": 0, "{": 0 };
+  const closing = { ")": "(", "]": "[", "}": "{" };
+
+  for (let index = 0; index <= source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character in depths) depths[character] += 1;
+    else if (character in closing) depths[closing[character]] -= 1;
+    const topLevel = Object.values(depths).every((depth) => depth === 0);
+    if ((character === "," && topLevel) || index === source.length) {
+      const raw = source.slice(start, index);
+      const leading = raw.match(/^\s*/)?.[0].length ?? 0;
+      segments.push({ text: raw.trim(), offset: baseOffset + start + leading });
+      start = index + 1;
+    }
+  }
+  return segments.filter((segment) => segment.text.length > 0);
+}
+
+function assignDefinitions(source, functionDefinitions) {
+  const results = [];
+  const seen = new Set();
+
+  function add(name, offset, api) {
+    const position = positionAtOffset(source, offset);
+    const callbackDefinition = functionDefinitions
+      .filter((definition) => definition.line <= position.line)
+      .at(-1);
+    const key = `${name}:${position.line}:${position.character}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    results.push({
+      kind: "assign",
+      name,
+      line: position.line,
+      start: position.character,
+      callback: callbackDefinition?.name,
+      callbackArgument: callbackDefinition?.argument,
+      api,
+    });
+  }
+
+  for (const match of source.matchAll(/\b(assign|assign_new|update)\s*\(/g)) {
+    const api = match[1];
+    const open = match.index + match[0].lastIndexOf("(");
+    const close = matchingDelimiter(source, open);
+    if (close === -1) continue;
+    const argumentsSource = source.slice(open + 1, close);
+    const segments = topLevelSegments(argumentsSource, open + 1);
+    const atom = segments.find((segment, index) =>
+      index <= 1 && /^:[a-zA-Z_]\w*[!?]?$/.test(segment.text),
+    );
+    if (atom) {
+      const name = atom.text.slice(1);
+      add(name, atom.offset + 1, api);
+      continue;
+    }
+
+    const possibleValues = segments.length > 1 ? segments.slice(1) : segments;
+    for (const segment of possibleValues) {
+      const keyword = segment.text.match(/^([a-zA-Z_]\w*[!?]?)\s*:/);
+      if (keyword) {
+        add(keyword[1], segment.offset + segment.text.indexOf(keyword[1]), api);
+        continue;
+      }
+      if (segment.text.startsWith("%{")) {
+        const bodyStart = segment.offset + segment.text.indexOf("{") + 1;
+        const body = segment.text.slice(segment.text.indexOf("{") + 1, -1);
+        for (const entry of topLevelSegments(body, bodyStart)) {
+          const key = entry.text.match(/^([a-zA-Z_]\w*[!?]?)\s*:/);
+          if (key) add(key[1], entry.offset + entry.text.indexOf(key[1]), api);
+        }
+      }
+    }
+  }
+
+  return results;
+}
+
+function blockEndLine(lines, startLine, headerEndLine = startLine) {
+  const indentation = lines[startLine].match(/^\s*/)?.[0].length ?? 0;
+  for (let line = headerEndLine + 1; line < lines.length; line += 1) {
+    const match = lines[line].match(/^(\s*)end\b/);
+    if (match && match[1].length === indentation) return line;
+  }
+  return lines.length;
+}
+
+function onMountHooks(header) {
+  const option = header.match(/\bon_mount\s*:\s*([\s\S]+)/)?.[1];
+  if (!option) return [];
+  const remainder = option.trim();
+  let value;
+  if (remainder.startsWith("[") || remainder.startsWith("{")) {
+    const [open, closeCharacter] = remainder.startsWith("[") ? ["[", "]"] : ["{", "}"];
+    const close = matchingDelimiter(remainder, 0, open, closeCharacter);
+    value = close === -1 ? remainder : remainder.slice(0, close + 1);
+  } else {
+    value = remainder.match(/^[A-Z][\w.]*/)?.[0] ?? "";
+  }
+  const hooks = [];
+  const tupleModules = new Set();
+  for (const match of value.matchAll(/\{\s*([A-Z][\w.]*)\s*,\s*:([a-zA-Z_]\w*[!?]?)\s*\}/g)) {
+    tupleModules.add(match[1]);
+    hooks.push({ module: match[1], argument: match[2] });
+  }
+  for (const match of value.matchAll(/\b([A-Z][\w.]*)\b/g)) {
+    if (!tupleModules.has(match[1])) hooks.push({ module: match[1], argument: "default" });
+  }
+  return hooks;
+}
+
+function liveRoutes(lines) {
+  const scopeBlocks = [];
+  for (let line = 0; line < lines.length; line += 1) {
+    const match = lines[line].match(/^\s*scope\s+["'][^"']*["']\s*,\s*([A-Z][\w.]*)\s+do\b/);
+    if (match) scopeBlocks.push({ module: match[1], start: line, end: blockEndLine(lines, line) });
+  }
+
+  const routes = [];
+  for (let line = 0; line < lines.length; line += 1) {
+    const match = lines[line].match(/^\s*live_session\s+:([a-zA-Z_]\w*[!?]?)/);
+    if (!match) continue;
+    let headerEnd = line;
+    while (headerEnd < lines.length && !/\bdo\s*$/.test(lines[headerEnd])) headerEnd += 1;
+    const end = blockEndLine(lines, line, headerEnd);
+    const header = lines.slice(line, headerEnd + 1).join("\n");
+    const hooks = onMountHooks(header);
+    const scope = scopeBlocks
+      .filter((entry) => entry.start < line && entry.end > end)
+      .at(-1);
+
+    for (let routeLine = headerEnd + 1; routeLine < end; routeLine += 1) {
+      const route = lines[routeLine].match(/^\s*live\s+["'][^"']*["']\s*,\s*([A-Z][\w.]*)/);
+      if (!route) continue;
+      const module = scope && !route[1].startsWith(`${scope.module}.`)
+        ? `${scope.module}.${route[1]}`
+        : route[1];
+      routes.push({ module, session: match[1], hooks, line: routeLine });
+    }
+    line = end;
+  }
+  return routes;
+}
+
 function parseElixirFile(filePath, source) {
   const lines = source.split(/\r?\n/);
   const moduleMatch = source.match(/^\s*defmodule\s+([A-Z][\w.]*)\s+do\b/m);
@@ -123,7 +307,16 @@ function parseElixirFile(filePath, source) {
 
     match = lineText.match(/^\s*defp?\s+([a-zA-Z_]\w*[!?]?)/);
     if (match) {
-      definitions.push({ kind: "function", name: match[1], line, start: lineText.indexOf(match[1]) });
+      const argument = match[1] === "on_mount"
+        ? lineText.match(/^\s*defp?\s+on_mount\s*\(\s*:([a-zA-Z_]\w*[!?]?)/)?.[1]
+        : undefined;
+      definitions.push({
+        kind: "function",
+        name: match[1],
+        line,
+        start: lineText.indexOf(match[1]),
+        argument,
+      });
     }
 
     match = lineText.match(/^\s*import\s+([A-Z][\w.]*)/);
@@ -135,13 +328,16 @@ function parseElixirFile(filePath, source) {
     match = lineText.match(/^\s*use\s*(?:\(\s*)?([A-Z][\w.]*)(?:\s*,\s*:([a-zA-Z_]\w*[!?]?))?/);
     if (match) uses.push({ module: match[1], macro: match[2], line });
 
-    const assignmentPatterns = [
-      new RegExp(`\\bassign(?:_new)?\\s*\\([^\\n]*?:([a-zA-Z_]\\w*[!?]?)`, "g"),
-      new RegExp(`\\bassign\\s*\\([^\\n]*?\\b([a-zA-Z_]\\w*[!?]?)\\s*:`, "g"),
-      new RegExp(`\\bupdate\\s*\\([^\\n]*?:([a-zA-Z_]\\w*[!?]?)`, "g"),
-      new RegExp(`\\bstream(?:_configure)?\\s*\\([^\\n]*?:([a-zA-Z_]\\w*[!?]?)`, "g"),
-    ];
-    for (const pattern of assignmentPatterns) {
+  });
+
+  const functions = definitions.filter((definition) => definition.kind === "function");
+  definitions.push(...assignDefinitions(source, functions));
+
+  lines.forEach((lineText, line) => {
+    for (const pattern of [
+      /\bstream(?:_configure)?\s*\([^\n]*?:([a-zA-Z_]\w*[!?]?)/g,
+    ]) {
+      let match;
       while ((match = pattern.exec(lineText)) !== null) {
         const name = match[1];
         definitions.push({ kind: "assign", name, line, start: lineText.indexOf(name, match.index) });
@@ -171,6 +367,7 @@ function parseElixirFile(filePath, source) {
     aliases,
     uses,
     eventHandlers,
+    liveRoutes: liveRoutes(lines),
   };
 }
 
@@ -354,7 +551,7 @@ function declarationLocationsForTemplate(owners, templatePath, name) {
       .filter(({ line }) => new RegExp(`\\b${helper}\\s*\\(`).test(line))
       .map(({ index }) => index);
     const targetLine = invocationLines.at(-1);
-    for (const kind of ["data", "prop", "attr", "slot"]) {
+    for (const kind of ["prop", "data", "attr", "slot"]) {
       const matches = owner.definitions.filter(
         (definition) => definition.name === name && definition.kind === kind,
       );
@@ -602,6 +799,43 @@ function surfaceLiveViewBuiltIn(root, name, openDocuments) {
   if (source === null) return [];
   const file = parseElixirFile(filePath, source);
   return locationsForDefinitions([file], name, new Set(["data"]));
+}
+
+function assignmentLocations(files, name, callbacks = null, callbackArguments = null) {
+  const priority = new Map([
+    ["mount", 0],
+    ["on_mount", 1],
+    ["handle_params", 2],
+    ["handle_event", 3],
+    ["handle_info", 4],
+  ]);
+  return files.flatMap((file) => file.definitions
+    .filter((definition) =>
+      definition.kind === "assign" &&
+      definition.name === name &&
+      (callbacks === null || callbacks.has(definition.callback)) &&
+      (callbackArguments === null || callbackArguments.has(definition.callbackArgument)),
+    )
+    .sort((left, right) =>
+      (priority.get(left.callback) ?? 10) - (priority.get(right.callback) ?? 10) ||
+      left.line - right.line,
+    )
+    .map((definition) =>
+      location(file.filePath, definition.line, definition.start, name.length),
+    ));
+}
+
+function onMountAssignmentLocations(index, owners, name) {
+  const ownerModules = new Set(owners.map((owner) => owner.module).filter(Boolean));
+  const hooks = index.flatMap((file) => file.liveRoutes)
+    .filter((route) => ownerModules.has(route.module))
+    .flatMap((route) => route.hooks);
+  return hooks.flatMap((hook) => assignmentLocations(
+    filesForModule(index, hook.module),
+    name,
+    new Set(["on_mount"]),
+    new Set([hook.argument]),
+  ));
 }
 
 function componentAttributeDefinitions(index, owners, token) {
@@ -903,8 +1137,11 @@ export function findDefinitions({
     const declarations = declarationLocationsForTemplate(owners, filePath, token.name);
     if (declarations.length > 0) return deduplicate(declarations);
 
-    const localAssignments = locationsForDefinitions(owners, token.name, new Set(["assign"]));
+    const localAssignments = assignmentLocations(owners, token.name);
     if (localAssignments.length > 0) return deduplicate(localAssignments);
+
+    const hookAssignments = onMountAssignmentLocations(index, owners, token.name);
+    if (hookAssignments.length > 0) return deduplicate(hookAssignments);
 
     if (ownersUseModule(index, owners, "Surface.LiveView")) {
       return deduplicate(surfaceLiveViewBuiltIn(root, token.name, openDocuments));
@@ -1044,7 +1281,7 @@ function handle(message) {
         referencesProvider: true,
         textDocumentSync: { openClose: true, change: 1 },
       },
-      serverInfo: { name: "surface-language-server", version: "0.0.6" },
+      serverInfo: { name: "surface-language-server", version: "0.0.7" },
     });
     return;
   }

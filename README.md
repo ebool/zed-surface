@@ -14,6 +14,8 @@ Surface-aware parsing instead of treating them as plain HEEx.
 - Bracket matching, automatic indentation, and document outline items
 - Go-to-definition for assigns, local variables, function components, and
   functions referenced by external `.sface` templates
+- Route-aware assign navigation through Phoenix router `live_session` and
+  `on_mount` hooks
 - Owner-aware LiveView event navigation from `phx-*` values to `handle_event/3`,
   with reverse Find References support
 - Surface 0.12 representative corpus tests
@@ -90,7 +92,10 @@ the `JS.push("delete")` call inside `event_button.ex`.
 Use `Go to Definition` or Cmd-click an identifier in a `.sface` file. The first
 version understands the following project patterns:
 
-- `@name` to `attr`, `prop`, `data`, `slot`, `assign`, `assign_new`, or `stream`
+- `@name` to `prop`, `data`, `attr`, `assign`, `assign_new`, `update`, or
+  `stream`, including positional, keyword-list, map, and piped assign calls
+- LiveView assigns inherited from router `live_session` hooks, with `scope`
+  aliases and module, tuple, or list-form `on_mount` declarations
 - component attributes such as `flash=` to the `attr` or `prop` contract attached
   to the resolved component function
 - named entries such as `<:footer>` to the `slot` contract attached to their
@@ -115,6 +120,9 @@ not compile the Mix project or expand macros.
   currently available for statically named LiveView client events.
 - Go-to-definition uses project source and common Surface/Phoenix conventions;
   dynamically generated definitions may not resolve.
+- Router-aware assign navigation currently requires conventional lexical
+  `scope`, `live_session`, and `live` declarations; macro-generated routes and
+  dynamic hook values are not expanded.
 - Unresolved assigns remain unresolved instead of falling back to unrelated
   same-named declarations elsewhere in the workspace.
 - Elixir injection requires the separately installed Elixir extension.
