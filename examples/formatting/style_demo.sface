@@ -1,0 +1,24 @@
+<!--
+  Document-formatting test:
+  Press Cmd+Shift+I on macOS (Format Buffer / `editor: format`). The declarations
+  below are intentionally under-indented so the Surface language server can
+  correct the CSS nesting.
+-->
+<section class="surface-format-demo">
+  <h1>Surface CSS formatting</h1>
+  <p>The surrounding Surface markup should remain intact.</p>
+</section>
+
+<style>
+  .surface-format-demo {
+  display: grid;
+  gap: 1rem;
+  padding: 1.5rem;
+  }
+
+  @media (min-width: 48rem) {
+  .surface-format-demo {
+  grid-template-columns: 2fr 1fr;
+  }
+  }
+</style>

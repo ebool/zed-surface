@@ -1,5 +1,8 @@
 {
   "languages": {
+    "Surface": {
+      "formatter": "language_server"
+    },
     "Elixir": {
       "language_servers": [
         "surface-language-server",

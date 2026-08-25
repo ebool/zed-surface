@@ -12,6 +12,7 @@ Surface-aware parsing instead of treating them as plain HEEx.
   `:on-*`
 - Elixir syntax injection inside expressions and block conditions
 - Bracket matching, automatic indentation, and document outline items
+- Document formatting through the project's `mix format`, with embedded `<style>` CSS indentation
 - Go-to-definition for assigns, local variables, function components, and
   functions referenced by external `.sface` templates
 - Route-aware assign navigation through Phoenix router `live_session` and
@@ -86,6 +87,14 @@ Open `examples/events/event_demo.sface` and Cmd-click the `delete` value. Both
 matching `handle_event/3` clauses in `event_demo.ex` are definitions. Run Find
 References on either handler event name to find the direct `.sface` event and
 the `JS.push("delete")` call inside `event_button.ex`.
+
+### Manual CSS formatting test
+
+Open `examples/formatting/style_demo.sface` and press Cmd+Shift+I on macOS
+(`Format Buffer` / `editor: format`). Its CSS declarations are intentionally
+under-indented. Formatting should indent declarations inside rules and nested
+rules inside `@media`. Running format a second time should produce no further
+changes.
 
 ## Navigation
 

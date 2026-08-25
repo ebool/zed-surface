@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { findDefinitions, findReferences } from "./server.mjs";
+import { findDefinitions, findReferences, formatStyleBlocks } from "./server.mjs";
 
 function fixture(files) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "surface-lsp-"));
@@ -33,6 +33,68 @@ function definition(root, relative, needle, offset = 1) {
 function locationPath(entry) {
   return new URL(entry.uri).pathname;
 }
+
+test("style blocks are formatted with CSS nesting indentation", () => {
+  const source = `<div class="card">Hello</div>
+
+<style>
+  .card {
+  display: grid;
+  }
+
+  @media (min-width: 40rem) {
+  .card {
+  grid-template-columns: 1fr 1fr;
+  }
+  }
+</style>
+`;
+
+  assert.equal(formatStyleBlocks(source), `<div class="card">Hello</div>
+
+<style>
+  .card {
+    display: grid;
+  }
+
+  @media (min-width: 40rem) {
+    .card {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+</style>
+`);
+});
+
+test("CSS braces inside strings and comments do not change indentation", () => {
+  const source = `<style>
+.example {
+content: "}";
+/* { ignored } */
+color: red;
+}
+</style>`;
+
+  assert.equal(formatStyleBlocks(source, 2), `<style>
+  .example {
+    content: "}";
+    /* { ignored } */
+    color: red;
+  }
+</style>`);
+});
+
+test("the checked-in formatting example demonstrates stable style indentation", () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const filePath = path.join(root, "examples/formatting/style_demo.sface");
+  const source = fs.readFileSync(filePath, "utf8");
+  const formatted = formatStyleBlocks(source);
+
+  assert.notEqual(formatted, source);
+  assert.equal(formatStyleBlocks(formatted), formatted);
+  assert.match(formatted, /  \.surface-format-demo \{\n    display: grid;\n    gap: 1rem;/);
+  assert.match(formatted, /  @media \(min-width: 48rem\) \{\n    \.surface-format-demo \{\n      grid-template-columns: 2fr 1fr;/);
+});
 
 function references(root, relative, needle, offset = 1, includeDeclaration = false) {
   const filePath = path.join(root, relative);

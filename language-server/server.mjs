@@ -2,6 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const IGNORED_DIRECTORIES = new Set([
@@ -31,6 +32,101 @@ function rangeAt(line, start, length) {
 
 function location(filePath, line, start, length) {
   return { uri: pathToUri(filePath), range: rangeAt(line, start, length) };
+}
+
+function cssBraceCounts(line, state) {
+  let opens = 0;
+  let closes = 0;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const next = line[index + 1];
+
+    if (state.comment) {
+      if (char === "*" && next === "/") {
+        state.comment = false;
+        index += 1;
+      }
+      continue;
+    }
+
+    if (state.quote) {
+      if (char === "\\") {
+        index += 1;
+      } else if (char === state.quote) {
+        state.quote = null;
+      }
+      continue;
+    }
+
+    if (char === "/" && next === "*") {
+      state.comment = true;
+      index += 1;
+    } else if (char === '"' || char === "'") {
+      state.quote = char;
+    } else if (char === "{") {
+      opens += 1;
+    } else if (char === "}") {
+      closes += 1;
+    }
+  }
+
+  return { opens, closes };
+}
+
+function formatCssBody(body, baseIndent, tabSize) {
+  const indent = (depth) => " ".repeat(baseIndent + depth * tabSize);
+  const state = { comment: false, quote: null };
+  let depth = 0;
+
+  return body
+    .replace(/^\s*\n/, "")
+    .replace(/\n\s*$/, "")
+    .split(/\r?\n/)
+    .map((line) => {
+      const text = line.trim();
+      if (text === "") return "";
+
+      const leadingClosings = text.match(/^}+/)?.[0].length ?? 0;
+      const lineDepth = Math.max(depth - leadingClosings, 0);
+      const { opens, closes } = cssBraceCounts(text, state);
+      depth = Math.max(lineDepth + opens - (closes - leadingClosings), 0);
+      return `${indent(lineDepth)}${text}`;
+    })
+    .join("\n");
+}
+
+export function formatStyleBlocks(source, tabSize = 2) {
+  const stylePattern = /<style(?:\s[^>]*)?>([\s\S]*?)<\/style>/gi;
+
+  return source.replace(stylePattern, (match, body, offset) => {
+    const openingEnd = match.indexOf(">") + 1;
+    const opening = match.slice(0, openingEnd);
+    const lineStart = source.lastIndexOf("\n", offset - 1) + 1;
+    const tagIndent = source.slice(lineStart, offset).match(/^\s*/)?.[0].length ?? 0;
+    const formatted = formatCssBody(body, tagIndent + tabSize, tabSize);
+    return `${opening}\n${formatted}\n${" ".repeat(tagIndent)}</style>`;
+  });
+}
+
+export function formatSurfaceDocument({ root, filePath, source, tabSize = 2 }) {
+  const result = spawnSync("mix", ["format", "--stdin-filename", filePath, "-"], {
+    cwd: root,
+    input: source,
+    encoding: "utf8",
+    maxBuffer: 10 * 1024 * 1024,
+    timeout: 15_000,
+  });
+  const surface = result.status === 0 && result.stdout ? result.stdout : source;
+  return formatStyleBlocks(surface, tabSize);
+}
+
+function fullDocumentRange(source) {
+  const lines = source.split(/\r?\n/);
+  return {
+    start: { line: 0, character: 0 },
+    end: { line: lines.length - 1, character: lines.at(-1).length },
+  };
 }
 
 function walkElixirFiles(root) {
@@ -1278,10 +1374,11 @@ function handle(message) {
     respond(message.id, {
       capabilities: {
         definitionProvider: true,
+        documentFormattingProvider: true,
         referencesProvider: true,
         textDocumentSync: { openClose: true, change: 1 },
       },
-      serverInfo: { name: "surface-language-server", version: "0.0.7" },
+      serverInfo: { name: "surface-language-server", version: "0.0.8" },
     });
     return;
   }
@@ -1343,6 +1440,24 @@ function handle(message) {
       openDocuments: documents,
       analysis: currentWorkspaceAnalysis(),
     }));
+    return;
+  }
+
+  if (message.method === "textDocument/formatting") {
+    const uri = message.params.textDocument.uri;
+    const filePath = uriToPath(uri);
+    const source = documents.get(uri) ?? fs.readFileSync(filePath, "utf8");
+    const formatted = formatSurfaceDocument({
+      root: workspaceRoot,
+      filePath,
+      source,
+      tabSize: message.params.options?.tabSize ?? 2,
+    });
+
+    respond(message.id, formatted === source ? [] : [{
+      range: fullDocumentRange(source),
+      newText: formatted,
+    }]);
     return;
   }
 
